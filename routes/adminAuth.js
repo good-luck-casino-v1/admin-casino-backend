@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
-const pool = require('../config/db');
+const db = require('../config/db');
 const nodemailer = require('nodemailer');
 
 // Admin Login

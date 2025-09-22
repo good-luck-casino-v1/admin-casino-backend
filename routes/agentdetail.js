@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
-const pool = require('../config/db');
+const db = require('../config/db');
 const router = express.Router();
 
 // Middleware for this router
