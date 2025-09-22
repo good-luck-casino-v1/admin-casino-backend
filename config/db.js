@@ -10,4 +10,6 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
+console.log('Database connected successfully');
+
 module.exports = pool;
