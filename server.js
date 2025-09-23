@@ -53,9 +53,9 @@ const authenticateAdmin = async (req, res, next) => {
  
 
 // API Routes
-app.use('/api/admin', adminAuthRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/admin', authenticateAdmin);
+// API Routes
+app.use('/api/admin', adminAuthRoutes); // No auth required (login, register, etc.)
+app.use('/api/admin', authenticateAdmin, adminRoutes); // Auth required
 app.use('/api/adminadd', addAdminRoutes);
 app.use('/api/tickets', ticketsRoutes);
 app.use('/api/users', userdashRouter);
@@ -64,6 +64,7 @@ app.use('/api/games', gameRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/dash', dashboardRoutes);
+
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/images', express.static(path.join(__dirname, '../frontend/public/images')));
