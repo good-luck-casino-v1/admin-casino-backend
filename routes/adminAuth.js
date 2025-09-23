@@ -10,7 +10,7 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     console.log("called");
     // Check if admin exists
-    const [admins] = await pool.execute(
+    const [admins] = await db.execute(
       'SELECT * FROM admin WHERE email = ?',
       [email]
     );
@@ -56,7 +56,7 @@ router.post('/forgot-password', async (req, res) => {
     const { email } = req.body;
     
     // Check if admin exists
-    const [admins] = await pool.execute(
+    const [admins] = await db.execute(
       'SELECT * FROM admin WHERE email = ?',
       [email]
     );

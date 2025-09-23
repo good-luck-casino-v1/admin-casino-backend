@@ -13,7 +13,7 @@ router.use(bodyParser.json());
 // Get all agents
 router.get('/agents', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM agents');
+    const [rows] = await db.query('SELECT * FROM agents');
     res.json(rows);
   } catch (error) {
     console.error('Error fetching agents:', error);
@@ -24,7 +24,7 @@ router.get('/agents', async (req, res) => {
 // Get agent count
 router.get('/agents/count', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT COUNT(*) as count FROM agents');
+    const [rows] = await db.query('SELECT COUNT(*) as count FROM agents');
     res.json({ count: rows[0].count });
   } catch (error) {
     console.error('Error fetching agent count:', error);
@@ -42,7 +42,7 @@ router.post('/agents', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
     
     // Start transaction
-    const connection = await pool.getConnection();
+    const connection = await db.getConnection();
     await connection.beginTransaction();
     
     try {
@@ -80,7 +80,7 @@ router.get('/agents/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM agents WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM agents WHERE id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Agent not found' });
@@ -98,7 +98,7 @@ router.get('/agentlogin/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM agentlogin WHERE agent_id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM agentlogin WHERE agent_id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Agent not found' });
@@ -114,7 +114,7 @@ router.get('/agentlogin/:id', async (req, res) => {
 // Get pending deposits
 router.get('/deposits/pending', async (req, res) => {
   try {
-    const [rows] = await pool.query(`
+    const [rows] = await db.query(`
       SELECT d.*, a.agent_name 
       FROM agent_deposit d
       JOIN agentlogin a ON d.agent_id = a.agent_id
@@ -133,7 +133,7 @@ router.post('/deposits', async (req, res) => {
   
   try {
     // Start transaction
-    const connection = await pool.getConnection();
+    const connection = await db.getConnection();
     await connection.beginTransaction();
     
     try {
@@ -172,7 +172,7 @@ router.put('/deposits/:id/accept', async (req, res) => {
   
   try {
     // Get deposit details
-    const [depositRows] = await pool.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
+    const [depositRows] = await db.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
     
     if (depositRows.length === 0) {
       return res.status(404).json({ message: 'Deposit not found' });
@@ -181,7 +181,7 @@ router.put('/deposits/:id/accept', async (req, res) => {
     const deposit = depositRows[0];
     
     // Start transaction
-    const connection = await pool.getConnection();
+    const connection = await db.getConnection();
     await connection.beginTransaction();
     
     try {
@@ -217,7 +217,7 @@ router.put('/deposits/:id/accept', async (req, res) => {
 // Get pending withdrawals
 router.get('/withdrawals/pending', async (req, res) => {
   try {
-    const [rows] = await pool.query(`
+    const [rows] = await db.query(`
       SELECT cp.*, a.agent_name 
       FROM commission_payments cp
       JOIN agentlogin a ON cp.agent_id = a.agent_id
@@ -236,7 +236,7 @@ router.post('/withdrawals', async (req, res) => {
   
   try {
     // Get agent details to check balance
-    const [agentRows] = await pool.query('SELECT * FROM agentlogin WHERE agent_id = ?', [agent_id]);
+    const [agentRows] = await db.query('SELECT * FROM agentlogin WHERE agent_id = ?', [agent_id]);
     
     if (agentRows.length === 0) {
       return res.status(404).json({ message: 'Agent not found' });
@@ -250,7 +250,7 @@ router.post('/withdrawals', async (req, res) => {
     }
     
     // Create withdrawal record with status 'pending'
-    const [result] = await pool.query(
+    const [result] = await db.query(
       'INSERT INTO commission_payments (agent_id, amount, status) VALUES (?, ?, ?)',
       [agent_id, amount, 'pending']
     );
@@ -268,7 +268,7 @@ router.put('/withdrawals/:id/accept', async (req, res) => {
   
   try {
     // Get withdrawal details
-    const [withdrawalRows] = await pool.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
+    const [withdrawalRows] = await db.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
     
     if (withdrawalRows.length === 0) {
       return res.status(404).json({ message: 'Withdrawal not found' });
@@ -277,7 +277,7 @@ router.put('/withdrawals/:id/accept', async (req, res) => {
     const withdrawal = withdrawalRows[0];
     
     // Start transaction
-    const connection = await pool.getConnection();
+    const connection = await db.getConnection();
     await connection.beginTransaction();
     
     try {
@@ -313,7 +313,7 @@ router.put('/withdrawals/:id/accept', async (req, res) => {
 // Get open tickets
 router.get('/tickets/open', async (req, res) => {
   try {
-    const [rows] = await pool.query(`
+    const [rows] = await db.query(`
       SELECT t.*, a.agent_name 
       FROM tickets t
       JOIN agentlogin a ON t.agent_id = a.agent_id
@@ -331,7 +331,7 @@ router.put('/tickets/:id/close', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [result] = await pool.query(
+    const [result] = await db.query(
       'UPDATE tickets SET status = ? WHERE id = ?',
       ['close', id]
     );
@@ -352,7 +352,7 @@ router.put('/tickets/:id/reject', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [result] = await pool.query(
+    const [result] = await db.query(
       'UPDATE tickets SET status = ? WHERE id = ?',
       ['reject', id]
     );
@@ -374,7 +374,7 @@ router.get('/players/:agentId', async (req, res) => {
   
   try {
     // Get agent name
-    const [agentRows] = await pool.query('SELECT agent_name FROM agentlogin WHERE agent_id = ?', [agentId]);
+    const [agentRows] = await db.query('SELECT agent_name FROM agentlogin WHERE agent_id = ?', [agentId]);
     
     if (agentRows.length === 0) {
       return res.status(404).json({ message: 'Agent not found' });
@@ -383,7 +383,7 @@ router.get('/players/:agentId', async (req, res) => {
     const agentName = agentRows[0].agent_name;
     
     // Get players
-    const [rows] = await pool.query(
+    const [rows] = await db.query(
       'SELECT id, name, email, mobile, wallet_balance, role FROM users WHERE referred_by = ?',
       [agentName]
     );
@@ -399,7 +399,7 @@ router.put('/withdrawals/:id/accept', async (req, res) => {
   
   try {
     // Get withdrawal details
-    const [withdrawalRows] = await pool.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
+    const [withdrawalRows] = await db.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
     
     if (withdrawalRows.length === 0) {
       return res.status(404).json({ message: 'Withdrawal not found' });
@@ -408,7 +408,7 @@ router.put('/withdrawals/:id/accept', async (req, res) => {
     const withdrawal = withdrawalRows[0];
     
     // Start transaction
-    const connection = await pool.getConnection();
+    const connection = await db.getConnection();
     await connection.beginTransaction();
     
     try {

@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
     
     query += ' ORDER BY created_at DESC';
     
-    const [rows] = await pool.query(query, params);
+    const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (error) {
     console.error('Error fetching games:', error);
@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
 // Get game count
 router.get('/count', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT COUNT(*) as count FROM games');
+    const [rows] = await db.query('SELECT COUNT(*) as count FROM games');
     res.json({ count: rows[0].count });
   } catch (error) {
     console.error('Error fetching game count:', error);
@@ -56,7 +56,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM games WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
@@ -79,7 +79,7 @@ router.post('/', async (req, res) => {
   }
   
   try {
-    const [result] = await pool.query(
+    const [result] = await db.query(
       `INSERT INTO games (name, category, min_bet, max_bet, image_url, status, rpt, gameUid)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -95,7 +95,7 @@ router.post('/', async (req, res) => {
     );
     
     // Return the newly created game
-    const [newGame] = await pool.query('SELECT * FROM games WHERE id = ?', [result.insertId]);
+    const [newGame] = await db.query('SELECT * FROM games WHERE id = ?', [result.insertId]);
     res.status(201).json(newGame[0]);
   } catch (error) {
     console.error('Error creating game:', error);
@@ -110,7 +110,7 @@ router.put('/:id', async (req, res) => {
   
   try {
     // Check if game exists
-    const [existingGame] = await pool.query('SELECT * FROM games WHERE id = ?', [id]);
+    const [existingGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     
     if (existingGame.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
@@ -161,10 +161,10 @@ router.put('/:id', async (req, res) => {
     
     const query = `UPDATE games SET ${updateFields.join(', ')} WHERE id = ?`;
     
-    await pool.query(query, params);
+    await db.query(query, params);
     
     // Return the updated game
-    const [updatedGame] = await pool.query('SELECT * FROM games WHERE id = ?', [id]);
+    const [updatedGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     res.json(updatedGame[0]);
   } catch (error) {
     console.error('Error updating game:', error);
@@ -183,13 +183,13 @@ router.put('/:id/status', async (req, res) => {
   
   try {
     // Check if game exists
-    const [existingGame] = await pool.query('SELECT * FROM games WHERE id = ?', [id]);
+    const [existingGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     
     if (existingGame.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
     }
     
-    await pool.query('UPDATE games SET status = ? WHERE id = ?', [status, id]);
+    await db.query('UPDATE games SET status = ? WHERE id = ?', [status, id]);
     res.json({ message: `Game ${status} successfully` });
   } catch (error) {
     console.error('Error updating game status:', error);
@@ -203,13 +203,13 @@ router.delete('/:id', async (req, res) => {
   
   try {
     // Check if game exists
-    const [existingGame] = await pool.query('SELECT * FROM games WHERE id = ?', [id]);
+    const [existingGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     
     if (existingGame.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
     }
     
-    await pool.query('DELETE FROM games WHERE id = ?', [id]);
+    await db.query('DELETE FROM games WHERE id = ?', [id]);
     res.json({ message: 'Game deleted successfully' });
   } catch (error) {
     console.error('Error deleting game:', error);

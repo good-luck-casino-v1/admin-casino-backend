@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const db = require('../config/db'); // Database connection (promise pool)
+const db = require('../config/db'); // Database connection (promise db)
 const crypto = require('crypto'); // Node.js built-in crypto module
 
 // Generate random referral code using crypto
