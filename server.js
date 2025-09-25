@@ -220,8 +220,8 @@ async function initializeDatabase() {
 }
 
 // Catch-all for unknown API endpoints
-app.use('/api/*', (req, res) => {
-  res.status(404).json({ 
+app.use(/^\/api\/.*/, (req, res) => {
+  res.status(404).json({
     error: 'API endpoint not found',
     path: req.originalUrl,
     method: req.method,
@@ -230,8 +230,9 @@ app.use('/api/*', (req, res) => {
   });
 });
 
+
 // Fallback handler for non-API routes - MUST BE LAST
-app.use('*', (req, res) => {
+app.use(/.*/, (req, res) => {
   // Only handle non-API routes here
   const publicIndexPath = path.join(__dirname, 'public', 'index.html');
   const clientIndexPath = path.join(__dirname, 'client', 'build', 'index.html');
