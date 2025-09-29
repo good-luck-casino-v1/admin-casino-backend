@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const db = require('../config/db'); // Database connection (promise db)
+const db = require('../config/db'); // Database connection (promise pool)
 const crypto = require('crypto'); // Node.js built-in crypto module
 
 // Generate random referral code using crypto
@@ -288,6 +288,76 @@ router.put('/transactions/:id/status', async (req, res) => {
           newBalance: null
         });
       }
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Server error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// PUT /api/users/:id/wallet - Update wallet balance and record transaction
+router.put('/:id/wallet', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, amount } = req.body;
+    
+    // Validate type and amount
+    if (!['deposit', 'withdraw'].includes(type)) {
+      return res.status(400).json({ message: 'Invalid transaction type' });
+    }
+    
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ message: 'Invalid amount' });
+    }
+    
+    // Get current user and wallet balance
+    const [userResults] = await db.query('SELECT * FROM users WHERE id = ?', [id]);
+    if (userResults.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = userResults[0];
+    const currentBalance = parseFloat(user.wallet_balance);
+    let newBalance;
+    
+    if (type === 'deposit') {
+      newBalance = currentBalance + amount;
+    } else if (type === 'withdraw') {
+      newBalance = currentBalance - amount;
+      // Check if user has enough balance
+      if (newBalance < 0) {
+        return res.status(400).json({ message: 'Insufficient balance' });
+      }
+    }
+    
+    // Start a transaction to ensure atomicity
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update user's wallet balance
+      await connection.query(
+        'UPDATE users SET wallet_balance = ? WHERE id = ?',
+        [newBalance, id]
+      );
+      
+      // Insert transaction record
+      await connection.query(
+        'INSERT INTO money_transactions (user_id, type, amount, payment_method, status) VALUES (?, ?, ?, ?, ?)',
+        [id, type, amount, 'cash', 'completed']
+      );
+      
+      await connection.commit();
+      
+      res.status(200).json({ 
+        message: `${type} successful`,
+        newBalance: newBalance
+      });
     } catch (error) {
       await connection.rollback();
       throw error;

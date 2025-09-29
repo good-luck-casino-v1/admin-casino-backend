@@ -8,6 +8,8 @@ const router = express.Router();
 router.use(cors());
 router.use(bodyParser.json());
 
+// ---------------- ALL ROUTES ---------------- //
+
 // Get all transactions with optional filters
 router.get('/', async (req, res) => {
   try {
@@ -15,7 +17,6 @@ router.get('/', async (req, res) => {
     let query = 'SELECT * FROM money_transactions';
     const params = [];
     
-    // Build WHERE clause based on filters
     const conditions = [];
     if (type) {
       conditions.push('type = ?');
@@ -55,6 +56,8 @@ router.get('/count', async (req, res) => {
   }
 });
 
+// ---------------- AGENT ROUTES (must come before /:id) ---------------- //
+
 // Get agent transactions with filters
 router.get('/agent', async (req, res) => {
   try {
@@ -83,7 +86,6 @@ router.get('/agent', async (req, res) => {
       FROM commission_payments 
     `;
     
-    // Reset conditions for the second table
     const conditions2 = [];
     if (status) {
       conditions2.push('status = ?');
@@ -94,31 +96,11 @@ router.get('/agent', async (req, res) => {
       query += ' WHERE ' + conditions2.join(' AND ');
     }
     
-    
-    
     const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (error) {
     console.error('Error fetching agent transactions:', error);
     res.status(500).json({ message: 'Error fetching agent transactions' });
-  }
-});
-
-// Get a specific transaction by ID
-router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const [rows] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
-    
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Transaction not found' });
-    }
-    
-    res.json(rows[0]);
-  } catch (error) {
-    console.error('Error fetching transaction:', error);
-    res.status(500).json({ message: 'Error fetching transaction' });
   }
 });
 
@@ -158,62 +140,6 @@ router.get('/agent/commission/:id', async (req, res) => {
   }
 });
 
-// Update transaction status
-router.put('/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  
-  if (!status || (status !== 'pending' && status !== 'completed' && status !== 'reject')) {
-    return res.status(400).json({ message: 'Valid status (pending/completed/reject) is required' });
-  }
-  
-  try {
-    // Check if transaction exists
-    const [existingTransaction] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
-    
-    if (existingTransaction.length === 0) {
-      return res.status(404).json({ message: 'Transaction not found' });
-    }
-    
-    // If transaction is being marked as completed, update user's wallet balance
-    let newBalance = null;
-    if (status === 'completed') {
-      const transaction = existingTransaction[0];
-      
-      // Get user's current wallet balance
-      const [userResult] = await db.query('SELECT wallet_balance FROM users WHERE id = ?', [transaction.user_id]);
-      
-      if (userResult.length > 0) {
-        const currentBalance = parseFloat(userResult[0].wallet_balance);
-        const transactionAmount = parseFloat(transaction.amount);
-        
-        // Calculate new balance based on transaction type
-        if (transaction.type === 'deposit') {
-          newBalance = currentBalance + transactionAmount;
-        } else if (transaction.type === 'withdrawal') {
-          newBalance = currentBalance - transactionAmount;
-        }
-        
-        // Update user's wallet balance
-        await db.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, transaction.user_id]);
-      }
-    }
-    
-    // Update transaction status
-    await db.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
-    
-    const response = { message: `Transaction ${status} successfully` };
-    if (newBalance !== null) {
-      response.newBalance = newBalance;
-    }
-    
-    res.json(response);
-  } catch (error) {
-    console.error('Error updating transaction status:', error);
-    res.status(500).json({ message: 'Error updating transaction status' });
-  }
-});
-
 // Update agent deposit status
 router.put('/agent/deposit/:id/status', async (req, res) => {
   const { id } = req.params;
@@ -224,7 +150,6 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
   }
   
   try {
-    // Check if deposit exists
     const [existingDeposit] = await db.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
     
     if (existingDeposit.length === 0) {
@@ -233,9 +158,7 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
     
     const deposit = existingDeposit[0];
     
-    // If deposit is being marked as completed, update agent's balance
     if (status === 'completed') {
-      // Get agent's current balance
       const [agentResult] = await db.query('SELECT balance FROM agentlogin WHERE id = ?', [deposit.agent_id]);
       
       if (agentResult.length > 0) {
@@ -243,12 +166,10 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
         const depositAmount = parseFloat(deposit.amount);
         const newBalance = currentBalance + depositAmount;
         
-        // Update agent's balance
         await db.query('UPDATE agentlogin SET balance = ? WHERE id = ?', [newBalance, deposit.agent_id]);
       }
     }
     
-    // Update deposit status
     await db.query('UPDATE agent_deposit SET status = ? WHERE id = ?', [status, id]);
     
     res.json({ message: `Agent deposit ${status} successfully` });
@@ -268,7 +189,6 @@ router.put('/agent/commission/:id/status', async (req, res) => {
   }
   
   try {
-    // Check if payment exists
     const [existingPayment] = await db.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
     
     if (existingPayment.length === 0) {
@@ -277,9 +197,7 @@ router.put('/agent/commission/:id/status', async (req, res) => {
     
     const payment = existingPayment[0];
     
-    // If payment is being marked as completed, update agent's balance
     if (status === 'completed') {
-      // Get agent's current balance
       const [agentResult] = await db.query('SELECT balance FROM agentlogin WHERE id = ?', [payment.agent_id]);
       
       if (agentResult.length > 0) {
@@ -287,18 +205,85 @@ router.put('/agent/commission/:id/status', async (req, res) => {
         const paymentAmount = parseFloat(payment.amount);
         const newBalance = currentBalance - paymentAmount;
         
-        // Update agent's balance
         await db.query('UPDATE agentlogin SET balance = ? WHERE id = ?', [newBalance, payment.agent_id]);
       }
     }
     
-    // Update payment status
     await db.query('UPDATE commission_payments SET status = ? WHERE id = ?', [status, id]);
     
     res.json({ message: `Agent withdraw ${status} successfully` });
   } catch (error) {
     console.error('Error updating commission payment status:', error);
     res.status(500).json({ message: 'Error updating agent withdraw status' });
+  }
+});
+
+// ---------------- GENERIC ROUTES (must come after agent routes) ---------------- //
+
+// Get a specific transaction by ID
+router.get('/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const [rows] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Transaction not found' });
+    }
+    
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching transaction:', error);
+    res.status(500).json({ message: 'Error fetching transaction' });
+  }
+});
+
+// Update transaction status
+router.put('/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  
+  if (!status || (status !== 'pending' && status !== 'completed' && status !== 'reject')) {
+    return res.status(400).json({ message: 'Valid status (pending/completed/reject) is required' });
+  }
+  
+  try {
+    const [existingTransaction] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
+    
+    if (existingTransaction.length === 0) {
+      return res.status(404).json({ message: 'Transaction not found' });
+    }
+    
+    let newBalance = null;
+    if (status === 'completed') {
+      const transaction = existingTransaction[0];
+      const [userResult] = await db.query('SELECT wallet_balance FROM users WHERE id = ?', [transaction.user_id]);
+      
+      if (userResult.length > 0) {
+        const currentBalance = parseFloat(userResult[0].wallet_balance);
+        const transactionAmount = parseFloat(transaction.amount);
+        
+        if (transaction.type === 'deposit') {
+          newBalance = currentBalance + transactionAmount;
+        } else if (transaction.type === 'withdrawal') {
+          newBalance = currentBalance - transactionAmount;
+        }
+        
+        await db.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, transaction.user_id]);
+      }
+    }
+    
+    await db.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
+    
+    const response = { message: `Transaction ${status} successfully` };
+    if (newBalance !== null) {
+      response.newBalance = newBalance;
+    }
+    
+    res.json(response);
+  } catch (error) {
+    console.error('Error updating transaction status:', error);
+    res.status(500).json({ message: 'Error updating transaction status' });
   }
 });
 

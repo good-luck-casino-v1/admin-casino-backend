@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const adminAuthRoutes = require('./routes/adminAuth');
 const adminRoutes = require('./routes/admin');
 const ticketsRoutes = require('./routes/tickets');
-const db = require('./config/db'); // Changed from pool to db to match your config
+const db = require('./config/db'); // Changed from config
 const bcrypt = require('bcryptjs');
 const addAdminRoutes = require('./routes/addadmin');
 const userdashRouter = require('./routes/userdash');
@@ -14,11 +14,17 @@ const gameRoutes = require('./routes/gameman');
 const transactionRoutes = require('./routes/transactions');
 const securityRoutes = require('./routes/security');
 const dashboardRoutes = require('./routes/dash');
+const paymentGatewayRoutes = require('./routes/paymentGateway');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Database middleware - fixed to use 'db' instead of 'pool'
+
+// server.js
+require('dotenv').config();
+console.log("ENV LOADED", process.env.SPACES_ENDPOINT); // should not be undefined
+
+// Database middleware - fixed to use 'db' instead of 'db'
 app.use((req, res, next) => {
   req.db = db;
   next();
@@ -126,6 +132,7 @@ app.use('/images', express.static(path.join(__dirname, 'public/images')));
 console.log('Setting up API routes...');
 
 // Original API paths
+// All API routes must be mounted before this
 app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', authenticateAdmin, adminRoutes);
 app.use('/api/adminadd', addAdminRoutes);
@@ -133,20 +140,24 @@ app.use('/api/tickets', ticketsRoutes);
 app.use('/api/users', userdashRouter);
 app.use('/api', agentRoutes);
 app.use('/api/games', gameRoutes);
-app.use('/api/transactions', transactionRoutes);
+app.use('/api/transactions', transactionRoutes);  // <-- transactions here
 app.use('/api/security', securityRoutes);
 app.use('/api/dash', dashboardRoutes);
+app.use('/api/payment-gateways', paymentGatewayRoutes);
+app.use('/api/payment-transactions', paymentGatewayRoutes);
 
 // Rewritten paths (ingress rewrites /api/admin/* to /admin/*)
-app.use('/admin', adminAuthRoutes);
-app.use('/admin', authenticateAdmin, adminRoutes);
-app.use('/adminadd', addAdminRoutes);
-app.use('/tickets', ticketsRoutes);
-app.use('/users', userdashRouter);
-app.use('/games', gameRoutes);
-app.use('/transactions', transactionRoutes);
-app.use('/security', securityRoutes);
-app.use('/dash', dashboardRoutes);
+// app.use('/admin', adminAuthRoutes);
+// app.use('/admin', authenticateAdmin, adminRoutes);
+// app.use('/adminadd', addAdminRoutes);
+// app.use('/tickets', ticketsRoutes);
+// app.use('/users', userdashRouter);
+// app.use('/games', gameRoutes);
+// app.use('/transactions', transactionRoutes);
+// app.use('/security', securityRoutes);
+// app.use('/dash', dashboardRoutes);
+// app.use('/payment-gateways', paymentGatewayRoutes);
+// app.use('/payment-transactions', paymentGatewayRoutes);
 
 console.log('API routes configured');
 
@@ -225,8 +236,7 @@ app.use(/^\/api\/.*/, (req, res) => {
     error: 'API endpoint not found',
     path: req.originalUrl,
     method: req.method,
-    timestamp: new Date().toISOString(),
-    note: 'Check available endpoints'
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -278,3 +288,4 @@ app.listen(PORT, async () => {
     process.exit(1);
   }
 });
+
