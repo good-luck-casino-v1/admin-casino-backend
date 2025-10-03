@@ -5,8 +5,6 @@ const multer = require('multer');
 const path = require('path');
 const db = require('../config/db');
 
-// ------------------- S3 SETUP -------------------
-// ------------------- S3 SETUP -------------------
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
 const s3 = new S3Client({
@@ -14,22 +12,19 @@ const s3 = new S3Client({
   endpoint: process.env.SPACES_ENDPOINT,
   forcePathStyle: false,
   credentials: {
-    accessKeyId: process.env.SPACES_KEY_ADMIN,       //  FIXED (was SPACES_KEY)
-    secretAccessKey: process.env.SPACES_SECRET_ADMIN //  FIXED (was SPACES_SECRET)
+    accessKeyId: process.env.SPACES_KEY_ADMIN,
+    secretAccessKey: process.env.SPACES_SECRET_ADMIN
   }
 });
 
-// Debug env load
+// Debug env
 console.log("Loaded S3 Config:", {
   region: process.env.SPACES_REGION,
   endpoint: process.env.SPACES_ENDPOINT,
   bucket: process.env.SPACES_BUCKET,
-  key: process.env.SPACES_KEY_ADMIN ? "✔️" : "❌",   // ⬅️ FIXED
-  secret: process.env.SPACES_SECRET_ADMIN ? "✔️" : "❌" // ⬅️ FIXED
+  key: process.env.SPACES_KEY_ADMIN ? "✔️" : "❌",
+  secret: process.env.SPACES_SECRET_ADMIN ? "✔️" : "❌"
 });
-
-
-// ------------------- END S3 SETUP -------------------
 
 const router = express.Router();
 
@@ -37,7 +32,7 @@ const router = express.Router();
 router.use(cors());
 router.use(bodyParser.json());
 
-// ------------------- MULTER MEMORY STORAGE FOR S3 -------------------
+// ---------------- MULTER MEMORY STORAGE (for S3) ----------------
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
@@ -49,30 +44,24 @@ const upload = multer({
   }
 });
 
+// ---------------- ROUTES ----------------
+
 // Get all games with optional filters
 router.get('/', async (req, res) => {
   try {
     const { category, status } = req.query;
     let query = 'SELECT * FROM games';
     const params = [];
-    
-    // Build WHERE clause based on filters
+
     const conditions = [];
-    if (category) {
-      conditions.push('category = ?');
-      params.push(category);
-    }
-    if (status) {
-      conditions.push('status = ?');
-      params.push(status);
-    }
-    
+    if (category) { conditions.push('category = ?'); params.push(category); }
+    if (status) { conditions.push('status = ?'); params.push(status); }
+
     if (conditions.length > 0) {
       query += ' WHERE ' + conditions.join(' AND ');
     }
-    
+
     query += ' ORDER BY created_at DESC';
-    
     const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (error) {
@@ -95,14 +84,12 @@ router.get('/count', async (req, res) => {
 // Get a specific game by ID
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
-  
+
   try {
     const [rows] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
-    
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
     }
-    
     res.json(rows[0]);
   } catch (error) {
     console.error('Error fetching game:', error);
@@ -113,12 +100,13 @@ router.get('/:id', async (req, res) => {
 // Create a new game
 router.post('/ins', upload.single('image'), async (req, res) => {
   try {
-    const { name, category, min_bet, max_bet, status, rpt, game_uid } = req.body;
+    const { name, gameCode, providerCode, category, bet_amount, status } = req.body;
     if (!name || !category) {
       return res.status(400).json({ message: 'Name and category are required' });
     }
 
     let image_url = null;
+    let image_filename = null;
 
     if (req.file) {
       const key = `games/${Date.now()}-${req.file.originalname}`;
@@ -129,40 +117,28 @@ router.post('/ins', upload.single('image'), async (req, res) => {
         ContentType: req.file.mimetype,
         ACL: 'public-read'
       }));
+      image_filename = key;
       image_url = `${process.env.SPACES_ENDPOINT.replace("https://", `https://${process.env.SPACES_BUCKET}.`)}/${key}`;
     }
 
     const [result] = await db.query(
-      `INSERT INTO games 
-        (name, category, min_bet, max_bet, image_url, status, rpt, gameUid)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        name,
-        category,
-        parseFloat(min_bet) || 1.00,
-        parseFloat(max_bet) || 1000.00,
-        image_url,
-        status || 'active',
-        parseFloat(rpt) || 0.00,
-        game_uid || null
-      ]
+      `INSERT INTO games (name, gameCode, providerCode, category, bet_amount, image_url, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, gameCode || null, providerCode || null, category, bet_amount || 100.00, image_url, status || 'active']
     );
 
     const [newGame] = await db.query('SELECT * FROM games WHERE id = ?', [result.insertId]);
     res.status(201).json(newGame[0]);
-
-  } catch (err) {
-    console.error("POST /games/ins Error:", err);
-    res.status(500).json({ message: 'Error creating game', error: err.message });
+  } catch (error) {
+    console.error('Error creating game:', error);
+    res.status(500).json({ message: 'Error creating game' });
   }
 });
-
-
 
 // Update a game
 router.put('/:id', upload.single('image'), async (req, res) => {
   const { id } = req.params;
-  const { name, category, min_bet, max_bet, status, rpt, game_uid } = req.body;
+  const { name, gameCode, providerCode, category, bet_amount } = req.body;
 
   try {
     const [existingGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
@@ -174,14 +150,11 @@ router.put('/:id', upload.single('image'), async (req, res) => {
     const params = [];
 
     if (name !== undefined) { updateFields.push('name = ?'); params.push(name); }
+    if (gameCode !== undefined) { updateFields.push('gameCode = ?'); params.push(gameCode); }
+    if (providerCode !== undefined) { updateFields.push('providerCode = ?'); params.push(providerCode); }
     if (category !== undefined) { updateFields.push('category = ?'); params.push(category); }
-    if (min_bet !== undefined) { updateFields.push('min_bet = ?'); params.push(min_bet); }
-    if (max_bet !== undefined) { updateFields.push('max_bet = ?'); params.push(max_bet); }
-    if (status !== undefined) { updateFields.push('status = ?'); params.push(status); }
-    if (rpt !== undefined) { updateFields.push('rpt = ?'); params.push(rpt); }
-    if (game_uid !== undefined) { updateFields.push('gameUid = ?'); params.push(game_uid); }
+    if (bet_amount !== undefined) { updateFields.push('bet_amount = ?'); params.push(bet_amount); }
 
-    // Upload new image to S3 if exists
     if (req.file) {
       const key = `games/${Date.now()}-${req.file.originalname}`;
       await s3.send(new PutObjectCommand({
@@ -191,7 +164,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
         ACL: 'public-read',
         ContentType: req.file.mimetype
       }));
-      const image_url = `${process.env.SPACES_ENDPOINT}/${process.env.SPACES_BUCKET}/${key}`;
+      const image_url = `${process.env.SPACES_ENDPOINT.replace("https://", `https://${process.env.SPACES_BUCKET}.`)}/${key}`;
       updateFields.push('image_url = ?');
       params.push(image_url);
     }
@@ -206,31 +179,27 @@ router.put('/:id', upload.single('image'), async (req, res) => {
 
     const [updatedGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
     res.json(updatedGame[0]);
-
   } catch (error) {
     console.error('Error updating game:', error);
     res.status(500).json({ message: 'Error updating game' });
   }
 });
 
-
 // Update game status
 router.put('/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-  
+
   if (!status || (status !== 'active' && status !== 'inactive')) {
     return res.status(400).json({ message: 'Valid status (active/inactive) is required' });
   }
-  
+
   try {
-    // Check if game exists
     const [existingGame] = await db.query('SELECT * FROM games WHERE id = ?', [id]);
-    
     if (existingGame.length === 0) {
       return res.status(404).json({ message: 'Game not found' });
     }
-    
+
     await db.query('UPDATE games SET status = ? WHERE id = ?', [status, id]);
     res.json({ message: `Game ${status} successfully` });
   } catch (error) {
@@ -249,9 +218,9 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Game not found' });
     }
 
-    // delete image from S3
+    // Delete from S3
     if (existingGame[0].image_url) {
-      const key = existingGame[0].image_url.split('/').slice(-2).join('/'); // get games/filename
+      const key = existingGame[0].image_url.split('/').slice(-2).join('/');
       await s3.send(new DeleteObjectCommand({
         Bucket: process.env.SPACES_BUCKET,
         Key: key
@@ -260,14 +229,10 @@ router.delete('/:id', async (req, res) => {
 
     await db.query('DELETE FROM games WHERE id = ?', [id]);
     res.json({ message: 'Game deleted successfully' });
-
   } catch (error) {
     console.error('Error deleting game:', error);
     res.status(500).json({ message: 'Error deleting game' });
   }
 });
-
-
-
 
 module.exports = router;
