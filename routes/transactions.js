@@ -3,6 +3,25 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const pool = require('../config/db');
 const router = express.Router();
+//  NEW IMPORTS — add this after your existing imports
+const multer = require('multer');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const crypto = require('crypto');
+const path = require('path');
+
+//  Setup Multer (for file upload parsing)
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+// Initialize DigitalOcean Spaces client
+const s3 = new S3Client({
+  region: process.env.SPACES_REGION,
+  endpoint: process.env.SPACES_ENDPOINT,
+  credentials: {
+    accessKeyId: process.env.SPACES_KEY_ADMIN,
+    secretAccessKey: process.env.SPACES_SECRET_ADMIN
+  }
+});
 
 // Middleware for this router
 router.use(cors());

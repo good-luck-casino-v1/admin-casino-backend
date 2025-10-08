@@ -24,7 +24,7 @@ transporter.verify((err, success) => {
   if (err) {
     console.error("SMTP connection failed:", err);
   } else {
-    console.log("✅ SMTP connected and ready");
+    console.log(" SMTP connected and ready");
   }
 });
 console.log("EMAIL_USER:", process.env.EMAIL_USER);
@@ -103,7 +103,7 @@ router.post('/forgot-password', async (req, res) => {
 
   console.log("Generated Reset Link:", resetLink);
 
-    // ✅ Use the top-level transporter (Zoho)
+    //  Use the top-level transporter (Zoho)
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
