@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const pool = require('../config/db');
+const db = require('../config/db');
 const router = express.Router();
 //  NEW IMPORTS — add this after your existing imports
 const multer = require('multer');
@@ -51,8 +51,22 @@ router.get('/', async (req, res) => {
     
     query += ' ORDER BY created_at DESC';
     
-    const [rows] = await pool.query(query, params);
-    res.json(rows);
+ const [rows] = await db.query(query, params);
+
+const rowsWithUrls = rows.map(tx => {
+  let screenshotUrl = null;
+  if (tx.screenshot) {
+    screenshotUrl = tx.screenshot.startsWith("http")
+      ? tx.screenshot
+      : `${process.env.SPACES_CDN}/${tx.screenshot}`;
+  }
+
+  return { ...tx, screenshot_url: screenshotUrl };
+});
+
+res.json(rowsWithUrls);
+
+
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.status(500).json({ message: 'Error fetching transactions' });
@@ -62,9 +76,9 @@ router.get('/', async (req, res) => {
 // Get transaction count (sum of pending transactions from all tables)
 router.get('/count', async (req, res) => {
   try {
-    const [moneyTransactions] = await pool.query('SELECT COUNT(*) as count FROM money_transactions WHERE status = "pending"');
-    const [agentDeposits] = await pool.query('SELECT COUNT(*) as count FROM agent_deposit WHERE status = "pending"');
-    const [commissionPayments] = await pool.query('SELECT COUNT(*) as count FROM commission_payments WHERE status = "pending"');
+    const [moneyTransactions] = await db.query('SELECT COUNT(*) as count FROM money_transactions WHERE status = "pending"');
+    const [agentDeposits] = await db.query('SELECT COUNT(*) as count FROM agent_deposit WHERE status = "pending"');
+    const [commissionPayments] = await db.query('SELECT COUNT(*) as count FROM commission_payments WHERE status = "pending"');
     
     const totalCount = moneyTransactions[0].count + agentDeposits[0].count + commissionPayments[0].count;
     res.json({ count: totalCount });
@@ -115,7 +129,7 @@ router.get('/agent', async (req, res) => {
     
     
     
-    const [rows] = await pool.query(query, params);
+    const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (error) {
     console.error('Error fetching agent transactions:', error);
@@ -128,7 +142,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Transaction not found' });
@@ -146,7 +160,7 @@ router.get('/agent/deposit/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Agent deposit not found' });
@@ -164,7 +178,7 @@ router.get('/agent/commission/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const [rows] = await pool.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
     
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Commission payment not found' });
@@ -188,7 +202,7 @@ router.put('/:id/status', async (req, res) => {
   
   try {
     // Check if transaction exists
-    const [existingTransaction] = await pool.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
+    const [existingTransaction] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
     
     if (existingTransaction.length === 0) {
       return res.status(404).json({ message: 'Transaction not found' });
@@ -200,7 +214,7 @@ router.put('/:id/status', async (req, res) => {
       const transaction = existingTransaction[0];
       
       // Get user's current wallet balance
-      const [userResult] = await pool.query('SELECT wallet_balance FROM users WHERE id = ?', [transaction.user_id]);
+      const [userResult] = await db.query('SELECT wallet_balance FROM users WHERE id = ?', [transaction.user_id]);
       
       if (userResult.length > 0) {
         const currentBalance = parseFloat(userResult[0].wallet_balance);
@@ -214,12 +228,12 @@ router.put('/:id/status', async (req, res) => {
         }
         
         // Update user's wallet balance
-        await pool.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, transaction.user_id]);
+        await db.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, transaction.user_id]);
       }
     }
     
     // Update transaction status
-    await pool.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
+    await db.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
     
     const response = { message: `Transaction ${status} successfully` };
     if (newBalance !== null) {
@@ -244,7 +258,7 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
   }
 
   try {
-    const [existingDeposit] = await pool.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
+    const [existingDeposit] = await db.query('SELECT * FROM agent_deposit WHERE id = ?', [id]);
 
     if (existingDeposit.length === 0) {
       return res.status(404).json({ message: 'Agent deposit not found' });
@@ -257,7 +271,7 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
     }
 
     if (status === 'completed') {
-      const [agentResult] = await pool.query(
+      const [agentResult] = await db.query(
         'SELECT balance FROM agentlogin WHERE agent_id = ?', [deposit.agent_id]
       );
 
@@ -266,13 +280,13 @@ router.put('/agent/deposit/:id/status', async (req, res) => {
         const depositAmount = Number(deposit.amount || 0);
         const newBalance = currentBalance + depositAmount;
 
-        await pool.query(
+        await db.query(
           'UPDATE agentlogin SET balance = ? WHERE agent_id = ?', [newBalance, deposit.agent_id]
         );
       }
     }
 
-    await pool.query('UPDATE agent_deposit SET status = ? WHERE id = ?', [status, id]);
+    await db.query('UPDATE agent_deposit SET status = ? WHERE id = ?', [status, id]);
 
     res.json({ message: `Agent deposit ${status} successfully` });
   } catch (error) {
@@ -293,7 +307,7 @@ router.put('/agent/commission/:id/status', async (req, res) => {
   }
 
   try {
-    const [existingPayment] = await pool.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
+    const [existingPayment] = await db.query('SELECT * FROM commission_payments WHERE id = ?', [id]);
 
     if (existingPayment.length === 0) {
       return res.status(404).json({ message: 'Commission payment not found' });
@@ -306,7 +320,7 @@ router.put('/agent/commission/:id/status', async (req, res) => {
     }
 
     if (status === 'completed') {
-      const [agentResult] = await pool.query(
+      const [agentResult] = await db.query(
         'SELECT balance FROM agentlogin WHERE agent_id = ?', [payment.agent_id]
       );
 
@@ -315,13 +329,13 @@ router.put('/agent/commission/:id/status', async (req, res) => {
         const withdrawAmount = Number(payment.amount || 0);
         const newBalance = currentBalance - withdrawAmount;
 
-        await pool.query(
+        await db.query(
           'UPDATE agentlogin SET balance = ? WHERE agent_id = ?', [newBalance, payment.agent_id]
         );
       }
     }
 
-    await pool.query('UPDATE commission_payments SET status = ? WHERE id = ?', [status, id]);
+    await db.query('UPDATE commission_payments SET status = ? WHERE id = ?', [status, id]);
 
     res.json({ message: `Agent withdraw ${status} successfully` });
   } catch (error) {

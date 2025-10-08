@@ -81,7 +81,8 @@ const authenticateAdmin = async (req, res, next) => {
       return res.status(401).json({ message: 'No token provided' });
     }
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'goodluckcasino_jwt_secret');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || '636a1bdbd96cb4d15882d9df2c373f90');
+
     
     const [admin] = await req.db.execute(
       'SELECT id, email, admin_type, name, mobile, photo FROM admin WHERE id = ?',

@@ -4,6 +4,8 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { authenticateToken } = require('../middleware/adminAuth');
+const db = require('../config/db');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -93,61 +95,35 @@ router.put('/update', upload.single('photo'), async (req, res) => {
 });
 
 // Change password - Updated to use email instead of admin ID
-router.post('/change-password', async (req, res) => {
+router.post('/change-password', authenticateToken, async (req, res) => {
   try {
-    const { oldPassword, newPassword, email } = req.body;
-    console.log(email);
-    console.log('Password change request received for email:', email);
-    
-    // Validate inputs
-    if (!oldPassword || !newPassword || !email) {
+    const { oldPassword, newPassword } = req.body;
+    const email = req.user?.email; // Extract from token instead of client input
+
+    console.log('Password change request for:', email);
+
+    if (!oldPassword || !newPassword) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    
-    // Get admin with password using email
-    const [rows] = await req.db.query(
-  'SELECT id, password FROM admin WHERE email = ?',
-  [email]
-);
-const admin = rows[0]; // Extract first row from result array
 
-console.log(admin);
-console.log("password", admin?.password); // Optional chaining for safety
+    const [rows] = await db.query('SELECT id, password FROM admin WHERE email = ?', [email]);
+    const admin = rows[0];
 
-if (!admin) {
-  console.log('Admin not found for email:', email);
-  return res.status(404).json({ message: 'Admin not found' });
-}
+    if (!admin) {
+      return res.status(404).json({ message: 'Admin not found' });
+    }
 
-if (!admin.password) {
-  console.log('Password field is missing for admin:', email);
-  return res.status(500).json({ message: 'Admin password data is missing' });
-}
-
-    
-    console.log('Admin found, comparing passwords');
-    
-    // Check if old password matches
     const isMatch = await bcrypt.compare(oldPassword, admin.password);
     if (!isMatch) {
-      console.log('Old password does not match for admin:', email);
       return res.status(400).json({ message: 'Invalid old password' });
     }
-    
-    console.log('Password match successful, hashing new password');
-    
-    // Hash new password
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    
-    // Update password using email
-    await req.db.query(
-      'UPDATE admin SET password = ? WHERE email = ?',
-      [hashedPassword, email]
-    );
-    
-    console.log('Password updated successfully for admin:', email);
-    
+
+    await db.query('UPDATE admin SET password = ? WHERE email = ?', [hashedPassword, email]);
+    console.log('Password updated successfully for:', email);
+
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     console.error('Error changing password:', error);

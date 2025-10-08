@@ -5,6 +5,8 @@ const db = require('../config/db');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 require('dotenv').config();
+const jwt = require('jsonwebtoken');
+
 
 // setup nodemailer transporter (Zoho)
 const transporter = nodemailer.createTransport({
@@ -35,45 +37,40 @@ console.log("EMAIL_PASS:", process.env.EMAIL_PASS ? "LOADED" : "MISSING");
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log("called");
-    // Check if admin exists
-    const [admins] = await db.execute(
-      'SELECT * FROM admin WHERE email = ?',
-      [email]
-    );
-    
+    console.log("Login called for:", email);
+
+    const [admins] = await db.execute('SELECT * FROM admin WHERE email = ?', [email]);
     if (admins.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Email not found' 
-      });
+      return res.status(400).json({ success: false, message: 'Email not found' });
     }
-    
+
     const admin = admins[0];
-    
-    // Check password
     const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Incorrect password' 
-      });
+      return res.status(400).json({ success: false, message: 'Incorrect password' });
     }
-    
-    // Return admin data (excluding password)
+
+    // ✅ Generate a JWT
+    const token = jwt.sign(
+      { id: admin.id, email: admin.email },
+      process.env.JWT_SECRET || '636a1bdbd96cb4d15882d9df2c373f90',
+      { expiresIn: '30d' }
+    );
+
+    // Exclude password before sending admin data
     const { password: _, ...adminData } = admin;
-    
+
+    // ✅ Send token along with admin info
     res.json({
       success: true,
       message: 'Login successful',
-      admin: adminData
+      token, // ✅ Added this line
+      admin: adminData,
     });
+
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error' 
-    });
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

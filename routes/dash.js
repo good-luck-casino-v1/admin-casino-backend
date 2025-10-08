@@ -9,6 +9,14 @@ router.get('/', async (req, res) => {
     const [usersResult] = await db.query('SELECT COUNT(*) as count FROM users');
     const totalUsers = usersResult[0].count;
 
+    // Get active users count
+    const [activeUsersResult] = await db.query("SELECT COUNT(*) as count FROM users WHERE status='Active'");
+    const activeUsers = activeUsersResult[0].count;
+
+    // Get suspended users count
+    const [suspendedUsersResult] = await db.query("SELECT COUNT(*) as count FROM users WHERE status='Suspended'");
+    const suspendedUsers = suspendedUsersResult[0].count;
+
     // Get total agents count
     const [agentsResult] = await db.query('SELECT COUNT(*) as count FROM agentlogin');
     const totalAgents = agentsResult[0].count;
@@ -24,6 +32,14 @@ router.get('/', async (req, res) => {
     // Get total games count
     const [gamesResult] = await db.query('SELECT COUNT(*) as count FROM games');
     const totalGames = gamesResult[0].count;
+    
+    // Get active games count
+    const [activeGamesResult] = await db.query("SELECT COUNT(*) as count FROM games WHERE status='Active'");
+    const activeGames = activeGamesResult[0].count;
+    
+    // Get inactive games count
+    const [inactiveGamesResult] = await db.query("SELECT COUNT(*) as count FROM games WHERE status='inactive'");
+    const inactiveGames = inactiveGamesResult[0].count;
     
     // Get total player deposit (sum of wallet_balance from users table)
     const [playerDepositResult] = await db.query('SELECT SUM(wallet_balance) as total FROM users');
@@ -67,10 +83,14 @@ router.get('/', async (req, res) => {
 
     res.json({
       totalUsers,
+      activeUsers,
+      suspendedUsers,
       totalAgents,
       totalAdmin,
       totalSuperAdmin,
       totalGames,
+      activeGames,
+      inactiveGames,
       totalPlayerDeposit,
       totalAgentDeposit,
       totalOpenTickets,
@@ -95,7 +115,5 @@ router.get('/admins', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
-
 
 module.exports = router;

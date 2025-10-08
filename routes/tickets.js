@@ -38,14 +38,24 @@ router.get('/', async (req, res) => {
     );
 
     // use Promise.all to await signed URLs
-    const ticketsWithUrls = await Promise.all(
-      tickets.map(async (ticket) => ({
-        ...ticket,
-        evidence_url: ticket.evidence
-          ? await getSignedUrlForAdmin(ticket.evidence) // only relative key
-          : null,
-      }))
-    );
+   const ticketsWithUrls = await Promise.all(
+  tickets.map(async (ticket) => {
+    let fileUrl = null;
+    if (ticket.evidence) {
+      if (ticket.evidence.startsWith("http")) {
+        fileUrl = ticket.evidence; // already full URL
+      } else {
+        fileUrl = `${process.env.SPACES_CDN}/${ticket.evidence}`;
+      }
+    }
+
+    return {
+      ...ticket,
+      evidence_url: fileUrl
+    };
+  })
+);
+
 
 console.log("Signed URL:", ticketsWithUrls[0]?.evidence_url);
 
@@ -70,7 +80,7 @@ router.get('/count', async (req, res) => {
   }
 });
 
-// ✅ Accept or reject ticket
+//  Accept or reject ticket
 router.put('/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
