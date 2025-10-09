@@ -1,95 +1,99 @@
+// routes/admin.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const AWS = require('aws-sdk');
 const path = require('path');
-const fs = require('fs');
 const { authenticateToken } = require('../middleware/adminAuth');
 const db = require('../config/db');
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, '../public/images/admin');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
+//  Configure DigitalOcean Spaces
+const spacesEndpoint = new AWS.Endpoint(process.env.SPACES_ENDPOINT.replace('https://', ''));
+const s3 = new AWS.S3({
+  endpoint: spacesEndpoint,
+  accessKeyId: process.env.SPACES_KEY_ADMIN,
+  secretAccessKey: process.env.SPACES_SECRET_ADMIN,
+  region: process.env.SPACES_REGION,
+});
+
+
+//  Use in-memory storage for S3 uploads
+const storage = multer.memoryStorage();
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed!'), false);
     }
-    cb(null, uploadPath);
+    cb(null, true);
   },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  }
-});
-const upload = multer({ storage });
-
-// Get current admin
-router.get('/current', async (req, res) => {
-  try {
-    // Assuming you have middleware to authenticate and get admin ID
-    const adminId = req.admin.id;
-    const [admin] = await req.db.query(
-      'SELECT id, email, admin_type, name, mobile, photo FROM admin WHERE id = ?',
-      [adminId]
-    );
-    
-    if (!admin) {
-      return res.status(404).json({ message: 'Admin not found' });
-    }
-    
-    res.json(admin);
-  } catch (error) {
-    console.error('Error fetching admin:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
 });
 
-// Update admin profile
-router.put('/update', upload.single('photo'), async (req, res) => {
+
+//  Update admin profile — now uploads to Spaces
+router.put('/update', authenticateToken, upload.single('photo'), async (req, res) => {
   try {
     const { name, mobile, email } = req.body;
-    console.log(name, mobile, email);
-    
-    // Get current admin data
-    const [currentAdmin] = await req.db.query(
-      'SELECT photo FROM admin WHERE email = ?',
-      [email]
-    );
-    
-    if (!currentAdmin) {
-      return res.status(404).json({ message: 'Admin not found' });
-    }
-    
-    // Prepare update data
-    const updateData = { name, mobile, email };
-    
-    // Handle photo update if new photo is provided
+    const adminId = req.admin.id;
+
+    // Fetch current admin
+    const [rows] = await db.query('SELECT photo FROM admin WHERE id = ?', [adminId]);
+    const currentAdmin = rows[0];
+    if (!currentAdmin) return res.status(404).json({ message: 'Admin not found' });
+
+    let photoUrl = currentAdmin.photo;
+
+    // If new file uploaded, upload to Spaces
     if (req.file) {
-      updateData.photo = req.file.filename;
-      
-      // Delete old photo if exists
-      if (currentAdmin.photo) {
-        const oldPhotoPath = path.join(__dirname, '../../frontend/public/images/admin', currentAdmin.photo);
-        if (fs.existsSync(oldPhotoPath)) {
-          fs.unlinkSync(oldPhotoPath);
+      const fileExt = path.extname(req.file.originalname);
+      const fileName = `admin/${adminId}-${Date.now()}${path.extname(req.file.originalname)}`;
+
+
+      const uploadParams = {
+  Bucket: process.env.SPACES_BUCKET,
+  Key: fileName,
+  Body: req.file.buffer,
+  ACL: 'public-read',
+  ContentType: req.file.mimetype,
+};
+const uploadResult = await s3.upload(uploadParams).promise();
+console.log('Uploaded to Spaces:', uploadResult.Location);
+photoUrl = uploadResult.Location;
+
+
+      //  Delete old photo if exists in Spaces
+      if (currentAdmin.photo && currentAdmin.photo.includes(process.env.SPACES_CDN)) {
+        const oldKey = currentAdmin.photo.split(`${process.env.SPACES_CDN}/`)[1];
+        if (oldKey) {
+          try {
+            await s3.deleteObject({
+              Bucket: process.env.SPACES_BUCKET,
+              Key: oldKey
+            }).promise();
+          } catch (err) {
+            console.warn('Old photo deletion failed:', err.message);
+          }
         }
       }
     }
-    
-    // Update admin in database
-    await req.db.query(
-      'UPDATE admin SET ? WHERE email = ?',
-      [updateData, email]
+
+    //  Update DB
+    await db.query(
+      'UPDATE admin SET name = ?, mobile = ?, email = ?, photo = ? WHERE id = ?',
+      [name, mobile, email, photoUrl, adminId]
     );
-    
-    // Get updated admin data to return to frontend
-    const [updatedAdmin] = await req.db.query(
-      'SELECT email, admin_type, name, mobile, photo FROM admin WHERE email = ?',
-      [email]
+
+    const [updatedRows] = await db.query(
+      'SELECT id, email, admin_type, name, mobile, photo FROM admin WHERE id = ?',
+      [adminId]
     );
-    
-    res.json({ admin: updatedAdmin });
+
+    res.json({ admin: updatedRows[0] });
   } catch (error) {
-    console.error('Error updating admin profile:', error);
+    console.error('Error updating profile:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

@@ -1,26 +1,28 @@
+// middleware/adminAuth.js
 const jwt = require('jsonwebtoken');
-const db= require('../config/db');
 
 const authenticateToken = (req, res, next) => {
-  console.log("Authorization header:", req.headers.authorization);
-
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    console.log('No token provided');
-    return res.status(401).json({ message: 'Unauthorized: No token provided' });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) {
-      console.log('Invalid token');
-      return res.status(403).json({ message: 'Unauthorized: Invalid token' });
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('No token provided');
+      return res.status(401).json({ message: 'Unauthorized: No token provided' });
     }
 
-    req.user = user;
-    next(); //  Proceed to next middleware or route
-  });
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    //  Attach to both for backward compatibility
+    req.user = decoded;
+    req.admin = decoded;
+
+    console.log(' Token verified for admin:', decoded);
+
+    next();
+  } catch (error) {
+    console.error(' Token verification failed:', error.message);
+    return res.status(403).json({ message: 'Unauthorized: Invalid or expired token' });
+  }
 };
 
-module.exports = { authenticateToken }; //  must be exported like this
+module.exports = { authenticateToken };

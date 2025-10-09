@@ -123,6 +123,8 @@ app.get('/cors-test', (req, res) => {
 
 // Static files
 app.use('/images', express.static(path.join(__dirname, 'public/images')));
+// CRITICAL FIX: Add static file serving for uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // API Routes - Handle both original and rewritten paths
 console.log('Setting up API routes...');
