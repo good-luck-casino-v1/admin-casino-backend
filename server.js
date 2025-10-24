@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -15,13 +16,21 @@ const transactionRoutes = require('./routes/transactions');
 const securityRoutes = require('./routes/security');
 const dashboardRoutes = require('./routes/dash');
 const paymentGatewayRoutes = require('./routes/paymentGateway');
+// const upiRoutes = require('./routes/upi');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// ✅ Add this block here
+console.log("🔧 WDDPAY ENV CHECK:", {
+  MERCHANT_ID: process.env.WDDPAY_MERCHANT_ID,
+  BASE_URL: process.env.WDDPAY_BASE_URL,
+  SECRET_KEY: process.env.WDDPAY_SECRET_KEY ? "***HIDDEN***" : "MISSING"
+});
 
 // server.js
-require('dotenv').config();
+
 console.log("ENV LOADED", process.env.SPACES_ENDPOINT); // should not be undefined
 
 // Database middleware - fixed to use 'db' instead of 'db'
@@ -81,7 +90,7 @@ const authenticateAdmin = async (req, res, next) => {
       return res.status(401).json({ message: 'No token provided' });
     }
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '636a1bdbd96cb4d15882d9df2c373f90');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || '9cb25ab2bf81e52faaea36da6c27734bd1a3208e');
 
     
     const [admin] = await req.db.execute(
@@ -143,6 +152,7 @@ app.use('/api/security', securityRoutes);
 app.use('/api/dash', dashboardRoutes);
 app.use('/api/payment-gateways', paymentGatewayRoutes);
 app.use('/api/payment-transactions', paymentGatewayRoutes);
+// app.use('/api/upi', upiRoutes);
 
 // Rewritten paths (ingress rewrites /api/admin/* to /admin/*)
 app.use('/admin', adminAuthRoutes);
@@ -156,6 +166,7 @@ app.use('/security', securityRoutes);
 app.use('/dash', dashboardRoutes);
 app.use('/payment-gateways', paymentGatewayRoutes);
 app.use('/payment-transactions', paymentGatewayRoutes);
+// app.use('/upi', upiRoutes);
 
 console.log('API routes configured');
 
