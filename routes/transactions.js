@@ -1,3 +1,4 @@
+const dotenv = require('dotenv');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -9,7 +10,7 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const dotenv = require('dotenv');
+
 const qs = require('qs');
 const { authenticateToken } = require('../middleware/adminAuth');
 
@@ -352,418 +353,256 @@ router.put('/agent/commission/:id/status', async (req, res) => {
 });
 
 
-// ===================== WDDPay Configuration =====================
-const MERCHANT_ID = process.env.WDDPAY_MERCHANT_ID;
-const SECRET_KEY = process.env.WDDPAY_SECRET_KEY;
-const GATEWAY_BASE = process.env.WDDPAY_BASE_URL?.replace(/\/$/, "") || "https://api.wddpay.vip";
-const CALLBACK_PATH =
-  (process.env.BACKEND_URL?.replace(/\/$/, "") || "https://api.goodluck24bet.com") +
-  "/api/upi/callback";
+const GATEWAY_BASE_URL = process.env.CLOUDPAY_BASE_URL;
+const MERCHANT_ID = process.env.CLOUDPAY_MERCHANT_ID;
+const API_TOKEN = process.env.CLOUDPAY_API_TOKEN;
+const PAYOUT_CALLBACK_URL = process.env.CLOUDPAY_PAYOUT_CALLBACK_URL;
 
+console.log("✅ CloudPay ENV loaded:", {
+  base: GATEWAY_BASE_URL,
+  merchant: MERCHANT_ID,
+  apiToken: API_TOKEN ? "OK" : "MISSING",
+  callback: PAYOUT_CALLBACK_URL
+});
 
-  // ===================== Helpers =====================
-function md5Lower(str) {
-  return crypto.createHash("md5").update(str, "utf8").digest("hex").toLowerCase();
+function generateSignature(canonicalString, token) {
+  if (!token) throw new Error("CLOUDPAY_API_TOKEN missing!");
+  return crypto.createHmac("sha256", token).update(canonicalString).digest("hex");
 }
 
-function buildTransferSign(params) {
-  const filtered = {};
-  Object.keys(params).forEach((k) => {
-    const v = params[k];
-    if (v !== undefined && v !== null) filtered[k] = String(v);
-  });
 
-  const signString =
-    Object.keys(filtered)
-      .sort()
-      .map((k) => `${k}=${filtered[k]}`)
-      .join("&") + `&key=${SECRET_KEY}`;
+/**
+ * ===========================================================
+ * ✅ ADMIN CLOUDPAY PAYOUT (UPI/BANK for INR)
+ * ===========================================================
+ * Endpoint: https://api.cloudpay.space/payout/php
+ * Canonical: merch_id|amount|acc_no|account_name|payment_method|account_type
+ * Docs: https://cloudpay.space/web/docs#payout-php
+ * ===========================================================
+ */
 
-  return { signString, sign: md5Lower(signString) };
-}
-
-//  Merchant Balance Check (Optional but Safe)
-async function getMerchantBalance() {
+router.post("/admin-payout", authenticateToken, async (req, res) => {
   try {
-    const signStr = `appId=${MERCHANT_ID}&key=${SECRET_KEY}`;
-    const sign = md5Lower(signStr);
-    const { data } = await axios.get(`${GATEWAY_BASE}/api/getBalance`, {
-      params: { appId: MERCHANT_ID, sign },
-      timeout: 10000,
-    });
-    return data;
-  } catch (err) {
-    console.error("getMerchantBalance error:", err.message);
-    throw err;
-  }
-}
-
-// Insert near top of file if not already present:
-async function getMerchantBalanceSafe() {
-  // returns object from gateway: { code, message, data: { balance, availableBalance, blockedBalance } }
-  return getMerchantBalance();
-}
-
-
-// ===================== Utility: Create MD5 Signature =====================
-function createSignatureFixedOrder(params) {
-  // Order based on official India rule
-  const {
-    account,
-    amount,
-    appId,
-    ifsc,
-    mobile,
-    notifyCallback,
-    orderNumber,
-    username,
-  } = params;
-
-  const signStr = `account=${account}&amount=${amount}&appId=${appId}&ifsc=${ifsc}&mobile=${mobile}&notifyCallback=${notifyCallback}&orderNumber=${orderNumber}&username=${username}&key=${SECRET_KEY}`;
-
-  const hash = crypto.createHash("md5").update(signStr, "utf8").digest("hex"); // lowercase per WDDPay doc
-  return { signStr, hash };
-}
-
-
-//  DEPOSIT (Collection Order)
-// ======================================================
-// router.post("/upi/deposit", requireAuth, async (req, res) => {
-//   const connection = await db.getConnection();
-//   try {
-//     const { name = "User", amount } = req.body;
-//     const user_id = req.user.id;
-
-//     if (!amount || parseFloat(amount) < 100)
-//       return res.status(400).json({ success: false, message: "Minimum deposit ₹100" });
-
-//     const transaction_id = "TXN" + Date.now();
-
-//     const BASE_FRONTEND_URL = process.env.FRONTEND_URL || "https://goodluck24bet.com";
-//     const BASE_BACKEND_URL = process.env.BACKEND_URL || "https://api.goodluck24bet.com";
-
-//     const redirect_url = `${BASE_FRONTEND_URL}/deposit-success`;
-//     const callback_url = `${BASE_BACKEND_URL}/api/upi/callback`;
-
-//     await connection.beginTransaction();
-
-//     await connection.query(
-//       `INSERT INTO payment_transactions 
-//        (player_id, name, transaction_id, merch_id, transaction_type, amount, currency, status, redirect_url, callback_url)
-//        VALUES (?, ?, ?, ?, 'ORDER', ?, 'INR', 'PENDING', ?, ?)`,
-//       [user_id, name, transaction_id, MERCHANT_ID, amount, redirect_url, callback_url]
-//     );
-
-//     //  Match WDDPay India fields
-//     const payload = {
-//       appId: MERCHANT_ID,
-//       orderNumber: transaction_id,
-//       amount: parseFloat(amount).toFixed(2),
-//       account: "testupi@oksbi", // dynamic if needed
-//       ifsc: "SBIN0000123", // required for bank mode
-//       mobile: "9876543210",
-//       username: name,
-//       notifyCallback: callback_url,
-//     };
-
-//     const { signStr, hash } = createSignatureFixedOrder(payload);
-//     payload.sign = hash;
-
-//     console.log("\n===================== 🧾 WDDPay Deposit Debug =====================");
-//     console.log("🟢 API Endpoint:", `${GATEWAY_BASE}/api/createPayOrder`);
-//     console.log("🟢 SIGN STRING:", signStr);
-//     console.log("🟢 SIGNATURE:", hash);
-//     console.log("🟢 Final Payload:", payload);
-//     console.log("==================================================================\n");
-
-//     const formBody = qs.stringify(payload);
-//     const gatewayRes = await axios.post(`${GATEWAY_BASE}/api/createPayOrder`, formBody, {
-//       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-//     });
-
-//     console.log(" [WDDPay Response] =", gatewayRes.data);
-
-//     await connection.query(
-//       `UPDATE payment_transactions SET gateway_response=? WHERE transaction_id=?`,
-//       [JSON.stringify(gatewayRes.data), transaction_id]
-//     );
-
-//     await connection.commit();
-
-//     if (gatewayRes.data.code === 10000) {
-//       res.json({
-//         success: true,
-//         transaction_id,
-//         payUrl: gatewayRes.data.data.payUrl,
-//         message: "Deposit created successfully.",
-//       });
-//     } else {
-//       res.json({
-//         success: false,
-//         transaction_id,
-//         gateway_response: gatewayRes.data,
-//         message: gatewayRes.data.message || "Deposit failed",
-//       });
-//     }
-//   } catch (err) {
-//     if (connection) await connection.rollback();
-//     console.error(" Deposit Error:", err.message);
-//     res.status(500).json({ success: false, message: err.message });
-//   } finally {
-//     if (connection) connection.release();
-//   }
-// });
-
-// ======================================================
-//  ADMIN-ONLY MANUAL PAYOUT TRIGGER
-// ======================================================
-// ====================== ADMIN MANUAL PAYOUT (FINAL INDIA VERIFIED) ======================
-router.post("/upi/admin/withdraw", authenticateToken, async (req, res) => {
-  const connection = await db.getConnection();
-  try {
-    const { transaction_id, account_name, upi_id, amount } = req.body;
+    const { transaction_id, amount, upi_id, account_name, acc_no } = req.body;
+    const amt = parseFloat(amount);
 
     if (!transaction_id)
       return res.status(400).json({ success: false, message: "Transaction ID required" });
-    if (!upi_id || !upi_id.includes("@"))
-      return res.status(400).json({ success: false, message: "Valid UPI ID required" });
-    if (!amount || Number(amount) < 100)
-      return res.status(400).json({ success: false, message: "Minimum withdrawal ₹100" });
 
-    await connection.beginTransaction();
+    if (isNaN(amt) || amt < 100)
+      return res.status(400).json({ success: false, message: "Minimum payout ₹100" });
 
-    // Check for existing transaction
-    let [tx] = await connection.query(
-      "SELECT id, player_id, amount, status FROM payment_transactions WHERE transaction_id = ? LIMIT 1",
-      [transaction_id]
+    const [tx] = await db.query(
+      `SELECT user_id FROM money_transactions WHERE transaction_id=? OR id=? LIMIT 1`,
+      [transaction_id, transaction_id]
     );
 
-    // Auto-sync from money_transactions if not found
-    if (!tx.length) {
-      [tx] = await connection.query(
-        "SELECT user_id AS player_id, amount, status FROM money_transactions WHERE transaction_id = ? LIMIT 1",
-        [transaction_id]
-      );
-
-      if (tx.length) {
-        const t = tx[0];
-        await connection.query(
-          `INSERT INTO payment_transactions 
-           (player_id, name, transaction_id, merch_id, transaction_type, amount, currency, status, created_at)
-           VALUES (?, ?, ?, ?, 'PAYOUT', ?, 'INR', 'PROCESSING', NOW())`,
-          [t.player_id || 0, account_name || "User", transaction_id, process.env.WDDPAY_MERCHANT_ID, t.amount]
-        );
-      }
-    }
-
-    // Fetch transaction again
-    const [refetched] = await connection.query(
-      "SELECT player_id, amount FROM payment_transactions WHERE transaction_id = ? LIMIT 1",
-      [transaction_id]
-    );
-    if (!refetched.length) {
-      await connection.rollback();
+    if (!tx.length)
       return res.status(404).json({ success: false, message: "Transaction not found" });
-    }
 
-    const txData = refetched[0];
+    const userId = tx[0].user_id;
 
-    // Prepare WDDPay India Transfer payload
-    const payload = {
-      appId: process.env.WDDPAY_MERCHANT_ID,
-      orderNumber: transaction_id,
-      amount: parseFloat(amount).toFixed(2),
-      bankName: "UPI",
-      receiptAccountName: account_name || "User",
-      cardNumber: upi_id,
-      mobile: "9876543210",
-      ifsc: "UPI0000000", //  required for UPI
-      notifyCallback: `${process.env.BACKEND_URL}/api/upi/callback`,
+    // ✅ Prepare payout payload
+    const payoutBody = {
+      merch_id: MERCHANT_ID,
+      amount: amt,
+      acc_no: upi_id?.trim() || acc_no?.trim(),
+      account_name: account_name || "User",
+      payment_method: upi_id ? "UPI" : "BANK",
+      account_type: "PERSONAL_BANK",
     };
 
-    // Generate signature
-    const signString =
-      Object.keys(payload)
-        .sort()
-        .map((k) => `${k}=${payload[k]}`)
-        .join("&") + `&key=${process.env.WDDPAY_SECRET_KEY}`;
-    const sign = crypto.createHash("md5").update(signString).digest("hex").toLowerCase();
-    payload.sign = sign;
+    if (!payoutBody.acc_no)
+      throw new Error("UPI ID or Bank Account Number required for payout.");
 
-    console.log("Sending verified India payout to WDDPay:", payload);
+    // ✅ Canonical + Signature
+    const canonical = `merch_id=${payoutBody.merch_id}|amount=${payoutBody.amount}|acc_no=${payoutBody.acc_no}|account_name=${payoutBody.account_name}|payment_method=${payoutBody.payment_method.toUpperCase()}|account_type=${payoutBody.account_type}`;
+    const sign = generateSignature(canonical, API_TOKEN);
 
-    // Send payout request
-    const { data: gatewayRes } = await axios.post(
-      `${process.env.WDDPAY_BASE_URL}/api/createTransferOrder`,
-      qs.stringify(payload),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    console.log("📦 CloudPay Payout Payload:", payoutBody);
+    console.log("🧾 Canonical:", canonical);
+    console.log("🔐 Signature:", sign);
+
+    // ✅ POST to CloudPay
+    const response = await axios.post(`${GATEWAY_BASE_URL}/payout/php`, payoutBody, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Verify": sign,
+      },
+    });
+
+    console.log("💸 CloudPay Payout Response:", response.data);
+
+    if (!response.data.status)
+      throw new Error(response.data.message || "CloudPay payout failed");
+
+    await db.query(
+      `UPDATE money_transactions 
+       SET status='processing', remarks='Admin payout initiated (CloudPay)', updated_at=NOW() 
+       WHERE transaction_id=? OR id=?`,
+      [transaction_id, transaction_id]
     );
 
-    console.log(" WDDPay Response:", gatewayRes);
-
-    await connection.query(
-      `UPDATE payment_transactions 
-       SET gateway_response = ?, status = 'PROCESSING' 
-       WHERE transaction_id = ?`,
-      [JSON.stringify(gatewayRes), transaction_id]
-    );
-
-    await connection.commit();
     res.json({
       success: true,
-      withdraw_id: transaction_id,
-      player_id: txData.player_id,
-      upi_used: upi_id,
-      gateway_response: gatewayRes,
-      message: "Admin payout sent successfully to WDDPay",
+      message: "✅ CloudPay payout initiated successfully",
+      data: response.data,
     });
   } catch (err) {
-    if (connection) await connection.rollback();
-    console.error(" Admin payout failed:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  } finally {
-    if (connection) connection.release();
+    console.error("❌ Admin Payout Error:", err.response?.data || err.message);
+    res.status(500).json({
+      success: false,
+      message: err.response?.data?.message || err.message || "Failed to initiate payout",
+    });
   }
 });
 
+/**
+ * ===========================================================
+ * ✅ ADMIN CLOUDPAY PAYOUT STATUS CHECK
+ * ===========================================================
+ * Endpoint: https://api.cloudpay.space/api/v1/payout-status
+ * Canonical: merch_id|withdraw_id|payout_type
+ * payout_type = "bank" for INR/UPI
+ * ===========================================================
+ */
 
-
-// ==================== POST /callback ====================
-// Handles async notifications from WDDPay (UPI Deposit & Withdraw)
-router.post("/upi/callback", express.urlencoded({ extended: false }), async (req, res) => {
+router.post("/admin-payout-status", authenticateToken, async (req, res) => {
   try {
-    const payload = req.body || {};
-    console.log("WDDPay Callback received:", payload);
+    const { withdraw_id } = req.body;
 
-    // =====================================================
-    //  1. Verify signature
-    // =====================================================
-    const receivedSign = payload.sign;
-    const copy = {};
-    Object.keys(payload).forEach((k) => {
-      if (k === "sign") return;
-      const v = payload[k];
-      if (v !== undefined && v !== null && String(v) !== "") copy[k] = String(v);
+    if (!withdraw_id)
+      return res.status(400).json({ success: false, message: "withdraw_id required" });
+
+    const body = {
+      merch_id: MERCHANT_ID,
+      withdraw_id,
+      payout_type: "bank",
+    };
+
+    const canonical = `merch_id=${body.merch_id}|withdraw_id=${body.withdraw_id}|payout_type=${body.payout_type}`;
+    const sign = generateSignature(canonical, API_TOKEN);
+
+    console.log("🧾 Canonical:", canonical);
+    console.log("🔐 Signature:", sign);
+
+    const response = await axios.post(`${GATEWAY_BASE_URL}/api/v1/payout-status`, body, {
+      headers: { "Content-Type": "application/json", "X-Verify": sign },
     });
 
-    const signString =
-      Object.keys(copy)
-        .sort()
-        .map((k) => `${k}=${copy[k]}`)
-        .join("&") + `&key=${SECRET_KEY}`;
+    console.log("💸 CloudPay Payout Status:", response.data);
 
-    const expectedSign = md5Lower(signString);
+    if (!response.data.status)
+      return res.status(400).json({
+        success: false,
+        message: response.data.message || "Failed to fetch payout status",
+      });
 
-    if (expectedSign !== receivedSign) {
-      console.warn(" Invalid callback signature!");
-      console.log("Expected:", expectedSign);
-      console.log("Received:", receivedSign);
-      return res.status(400).send("invalid sign");
-    }
+    const txnStatus = (response.data.result?.txnStatus || "").toUpperCase();
+    const newStatus = txnStatus === "SUCCESS" ? "completed" : txnStatus === "FAILURE" ? "failed" : "processing";
 
-    // =====================================================
-    //  2. Extract basic fields
-    // =====================================================
-    const orderNumber = payload.orderNumber || payload.orderNo || payload.merchantOrderNo;
-    const orderStatus = payload.orderStatus ?? payload.order_status ?? payload.status;
-    const amount = parseFloat(payload.amount || 0);
-
-    if (!orderNumber) {
-      console.warn("Callback without orderNumber");
-      return res.status(400).send("missing order");
-    }
-
-    // =====================================================
-    //  3. Map WDDPay numeric status → local ENUM status
-    // =====================================================
-    // 1=pending, 2=processing, 3=success, 4=failure, 5=cancelled
-    let dbStatus = "PENDING";
-    const os = Number(orderStatus);
-    if (os === 3) dbStatus = "SUCCESS";
-    else if (os === 4 || os === 5) dbStatus = "FAILURE";
-    else if (os === 2) dbStatus = "PROCESSING";
-    else dbStatus = "PENDING";
-
-    // =====================================================
-    //  4. Fetch current transaction details
-    // =====================================================
-    const [rows] = await db.query(
-      `SELECT player_id, amount, transaction_type, status FROM payment_transactions WHERE transaction_id = ? LIMIT 1`,
-      [orderNumber]
-    );
-
-    if (!rows || rows.length === 0) {
-      console.warn("Unknown transaction in callback:", orderNumber);
-      return res.status(400).send("unknown order");
-    }
-
-    const tx = rows[0];
-    const prevStatus = tx.status;
-    const terminalStatuses = ["SUCCESS", "FAILURE"];
-
-    // If already finalized and same status — ignore duplicate callback
-    if (terminalStatuses.includes(prevStatus) && prevStatus === dbStatus) {
-      console.log("Duplicate callback ignored for:", orderNumber);
-      return res.send("success");
-    }
-
-    // =====================================================
-    //  5. Update payment record with latest gateway response
-    // =====================================================
     await db.query(
-      `UPDATE payment_transactions SET status = ?, gateway_response = ? WHERE transaction_id = ?`,
-      [dbStatus, JSON.stringify(payload), orderNumber]
+      `UPDATE money_transactions 
+       SET status=?, remarks='Payout ${txnStatus.toLowerCase()} (manual check)', updated_at=NOW()
+       WHERE transaction_id=? OR remarks LIKE ?`,
+      [newStatus, withdraw_id, `%${withdraw_id}%`]
     );
 
-    // =====================================================
-    //  6. Handle user wallet balance updates
-    // =====================================================
-    if (tx.transaction_type === "PAYOUT") {
-      if (dbStatus === "FAILURE") {
-        // Refund user since we already deducted at initiation
-        await db.query(
-          `UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?`,
-          [parseFloat(tx.amount), tx.player_id]
-        );
+    res.json({
+      success: true,
+      message: "✅ Payout status fetched successfully",
+      data: response.data.result,
+    });
+  } catch (err) {
+    console.error("💥 Payout Status Error:", err.response?.data || err.message);
+    res.status(500).json({
+      success: false,
+      message: err.response?.data?.message || err.message || "Failed to fetch payout status",
+    });
+  }
+});
 
-        await db.query(
-          `UPDATE payment_transactions SET remark = CONCAT(IFNULL(remark,''), ' | refunded after payout failure') WHERE transaction_id = ?`,
-          [orderNumber]
-        );
+/**
+ * ===========================================================
+ * ✅ SECURE CLOUDPAY PAYOUT CALLBACK (WEBHOOK)
+ * ===========================================================
+ * Verifies CloudPay's HMAC-SHA256 signature.
+ * Always return 200 OK to avoid duplicate retries.
+ * ===========================================================
+ */
 
-        console.log(`💸 Refunded ₹${tx.amount} to user ${tx.player_id} due to payout failure.`);
-      } else if (dbStatus === "SUCCESS") {
-        // Payout success — do not touch wallet again (already deducted)
-        await db.query(
-          `UPDATE payment_transactions SET remark = CONCAT(IFNULL(remark,''), ' | payout success confirmed') WHERE transaction_id = ?`,
-          [orderNumber]
-        );
-        console.log(` Payout success recorded for ${orderNumber}`);
-      }
-    } else if (tx.transaction_type === "ORDER") {
-      if (dbStatus === "SUCCESS" && prevStatus !== "SUCCESS") {
-        // Deposit success — add to wallet once
-        await db.query(
-          `UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?`,
-          [amount, tx.player_id]
-        );
+router.post("/upi/payout-callback", async (req, res) => {
+  try {
+    console.log("📥 CloudPay Callback received:", req.body);
+    const { withdraw_id, txnStatus, amount, sign } = req.body;
 
-        await db.query(
-          `UPDATE payment_transactions SET remark = CONCAT(IFNULL(remark,''), ' | deposit credited') WHERE transaction_id = ?`,
-          [orderNumber]
-        );
-        console.log(`Credited ₹${amount} to user ${tx.player_id} (deposit success).`);
-      }
+    if (!withdraw_id) return res.status(200).send("OK");
+
+    const canonical = `merch_id=${MERCHANT_ID}|withdraw_id=${withdraw_id}|payout_type=bank`;
+    const expectedSign = generateSignature(canonical, API_TOKEN);
+
+    if (!sign || sign.toLowerCase() !== expectedSign.toLowerCase()) {
+      console.warn("🚨 Invalid signature in CloudPay callback!");
+      return res.status(403).send("Invalid signature");
     }
 
-    // =====================================================
-    //  7. Finalize
-    // =====================================================
-    console.log(` Callback processed for ${orderNumber}: ${dbStatus}`);
-    return res.send("success");
+    console.log("✅ Verified CloudPay signature");
+    const status = (txnStatus || "").toUpperCase();
+
+    const [tx] = await db.query(
+      `SELECT * FROM money_transactions WHERE transaction_id=? OR remarks LIKE ? LIMIT 1`,
+      [withdraw_id, `%${withdraw_id}%`]
+    );
+
+    if (!tx.length) {
+      console.warn(`⚠️ No transaction found for withdraw_id ${withdraw_id}`);
+      return res.status(200).send("OK");
+    }
+
+    const txn = tx[0];
+    const userId = txn.user_id;
+
+    if (status === "SUCCESS") {
+      await db.query(
+        `UPDATE money_transactions SET status='completed', remarks='Payout success (callback verified)', updated_at=NOW() WHERE id=?`,
+        [txn.id]
+      );
+      console.log(`✅ Payout SUCCESS for ${withdraw_id}`);
+    } else if (["FAILURE", "FAILED"].includes(status)) {
+      const [alreadyRefunded] = await db.query(
+        `SELECT id FROM refund_log WHERE transaction_id=? LIMIT 1`,
+        [txn.id]
+      );
+
+      if (!alreadyRefunded.length) {
+        await db.query(
+          `UPDATE users SET wallet_balance = wallet_balance + ? WHERE id=?`,
+          [amount || txn.amount, userId]
+        );
+        await db.query(
+          `INSERT INTO refund_log (transaction_id, user_id, amount, created_at) VALUES (?, ?, ?, NOW())`,
+          [txn.id, userId, amount || txn.amount]
+        );
+        console.log(`💰 Refunded ₹${amount || txn.amount} for failed payout ${withdraw_id}`);
+      } else {
+        console.log(`⚠️ Duplicate refund prevented for ${withdraw_id}`);
+      }
+
+      await db.query(
+        `UPDATE money_transactions SET status='failed', remarks='Payout failed (callback verified)', updated_at=NOW() WHERE id=?`,
+        [txn.id]
+      );
+    } else if (status === "PROCESSING") {
+      await db.query(
+        `UPDATE money_transactions SET status='processing', remarks='Payout processing (callback verified)', updated_at=NOW() WHERE id=?`,
+        [txn.id]
+      );
+    }
+
+    res.status(200).send("OK");
   } catch (err) {
-    console.error(" Callback processing failed:", err);
-    return res.status(500).send("fail");
+    console.error("💥 Callback Error:", err.message);
+    res.status(200).send("OK");
   }
 });
 
