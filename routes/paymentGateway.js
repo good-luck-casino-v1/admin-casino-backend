@@ -26,24 +26,48 @@ router.get('/names', async (req, res) => {
 
 // GET /api/payment-transactions - Get all transactions
 router.get('/pay', async (req, res) => {
-    console.log("Fetching all payment transactions");
+  console.log("🔍 Fetching all payment transactions with joined user data...");
+
   try {
-    const [results] = await db.query('SELECT * FROM payment_transactions ORDER BY created_at DESC');
+    const [results] = await db.query(`
+      SELECT 
+        pt.id,
+        pt.name AS gateway,
+        pt.player_id,
+        -- prefer user's name, fallback to pt.player_name, fallback to "Unknown Player"
+        COALESCE(u.name, pt.player_name, 'Unknown Player') AS player_name,
+        pt.transaction_id,
+        pt.merch_id,
+        pt.transaction_type AS type,
+        pt.amount,
+        pt.status,
+        pt.created_at
+      FROM payment_transactions pt
+      LEFT JOIN users u 
+        ON CAST(pt.player_id AS CHAR) = CAST(u.id AS CHAR)
+      ORDER BY pt.created_at DESC;
+    `);
+    // console.log("🔎 Sample payment row:", results[0]);
     res.status(200).json(results);
   } catch (error) {
-    console.error('Server error:', error);
+    console.error('❌ Error fetching payment transactions:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+
 
 // GET /api/payment-transactions/by-gateway/:gatewayName - Get transactions for a specific gateway
 router.get('/by-gateway/:gatewayName', async (req, res) => {
   try {
     const { gatewayName } = req.params;
-    const [results] = await db.query(
-      'SELECT * FROM payment_transactions WHERE name = ? ORDER BY created_at DESC',
-      [gatewayName]
-    );
+    const [results] = await db.query(`
+      SELECT pt.*, u.name as player_name
+      FROM payment_transactions pt
+      LEFT JOIN users u ON pt.player_id = u.id
+      WHERE pt.name = ?
+      ORDER BY pt.created_at DESC
+    `, [gatewayName]);
     res.status(200).json(results);
   } catch (error) {
     console.error('Server error:', error);

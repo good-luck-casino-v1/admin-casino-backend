@@ -15,7 +15,7 @@ const qs = require('qs');
 const { authenticateToken } = require('../middleware/adminAuth');
 
 dotenv.config();
-	
+  
 
 //  Setup Multer (for file upload parsing)
 const storage = multer.memoryStorage();
@@ -39,6 +39,7 @@ router.use(bodyParser.json());
 router.get('/', async (req, res) => {
   try {
     const { type, status } = req.query;
+    // let query = 'SELECT * FROM money_transactions';
     let query = 'SELECT * FROM money_transactions';
     const params = [];
     
@@ -69,10 +70,18 @@ const rowsWithUrls = rows.map(tx => {
       : `${process.env.SPACES_CDN}/${tx.screenshot}`;
   }
 
-  return { ...tx, screenshot_url: screenshotUrl };
+  // ✅ Hide payment_method details for deposits only
+  const sanitizedTx = { ...tx };
+  if (tx.type === 'deposit') {
+    delete sanitizedTx.payment_method;   // Remove field entirely
+    delete sanitizedTx.gateway_name;     // Optional: if you have multiple fields
+  }
+
+  return { ...sanitizedTx, screenshot_url: screenshotUrl };
 });
 
 res.json(rowsWithUrls);
+
 
 
   } catch (error) {
@@ -200,58 +209,94 @@ router.get('/agent/commission/:id', async (req, res) => {
 });
 
 // Update transaction status
-router.put('/:id/status', async (req, res) => {
+// ✅ Update transaction status + trigger payout when approved
+router.put('/:id/status', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-  
-  if (!status || (status !== 'pending' && status !== 'completed' && status !== 'reject')) {
+
+  if (!status || !['pending', 'completed', 'reject'].includes(status)) {
     return res.status(400).json({ message: 'Valid status (pending/completed/reject) is required' });
   }
-  
+
+  let connection;
   try {
-    // Check if transaction exists
-    const [existingTransaction] = await db.query('SELECT * FROM money_transactions WHERE id = ?', [id]);
-    
-    if (existingTransaction.length === 0) {
+    connection = await db.getConnection();
+
+    // 🔍 Fetch transaction details
+    const [existingTransaction] = await connection.query(
+      'SELECT * FROM money_transactions WHERE id = ?',
+      [id]
+    );
+
+    if (!existingTransaction.length) {
       return res.status(404).json({ message: 'Transaction not found' });
     }
-    
-    // If transaction is being marked as completed, update user's wallet balance
-    let newBalance = null;
-    if (status === 'completed') {
-      const transaction = existingTransaction[0];
-      
-      // Get user's current wallet balance
-      const [userResult] = await db.query('SELECT wallet_balance FROM users WHERE id = ?', [transaction.user_id]);
-      
-      if (userResult.length > 0) {
-        const currentBalance = parseFloat(userResult[0].wallet_balance);
-        const transactionAmount = parseFloat(transaction.amount);
-        
-        // Calculate new balance based on transaction type
-        if (transaction.type === 'deposit') {
-          newBalance = currentBalance + transactionAmount;
-        } else if (transaction.type === 'withdrawal') {
-          newBalance = currentBalance - transactionAmount;
-        }
-        
-        // Update user's wallet balance
-        await db.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, transaction.user_id]);
+
+    const tx = existingTransaction[0];
+    const { user_id, amount, payment_method, transaction_id, type } = tx;
+
+    // 🟡 Auto trigger payout for withdrawals when marked as completed
+    if (status === 'completed' && type === 'withdrawal') {
+      const gateway = (payment_method || '').toLowerCase();
+      console.log(`🚀 Auto-payout triggered via ${gateway} for Transaction: ${transaction_id}`);
+
+      // Prepare payout data to send to /admin-payout endpoint
+      const payoutBody = {
+        transaction_id,
+        amount,
+        userId: user_id,
+        payment_method: payment_method,
+        gateway: gateway,
+        bank_code: tx.bank_code,
+        ifsc_code: tx.ifsc_code,
+        acc_no: tx.account_number || tx.acc_no,
+        account_name: tx.account_name,
+        upi_id: tx.upi_id
+      };
+
+      try {
+        // Forward payout to your working /admin-payout API (local self-call)
+        const payoutURL = `${process.env.BASE_URL}/api/transactions/admin-payout`;
+
+        const payoutResponse = await axios.post(payoutURL, payoutBody, {
+          headers: { Authorization: req.headers.authorization },
+          timeout: 20000,
+        });
+
+        console.log('✅ Payout Auto Trigger Response:', payoutResponse.data);
+
+        // Update status to processing since payout is triggered
+        await connection.query(
+          `UPDATE money_transactions 
+           SET status='processing', remarks='Auto payout initiated', updated_at=NOW()
+           WHERE id=?`,
+          [id]
+        );
+
+        return res.json({
+          success: true,
+          message: 'Payout triggered successfully via ' + gateway.toUpperCase(),
+          data: payoutResponse.data,
+        });
+
+      } catch (err) {
+        console.error('💥 Auto payout trigger failed:', err.response?.data || err.message);
+        return res.status(500).json({
+          success: false,
+          message: err.response?.data?.message || 'Auto payout trigger failed',
+        });
       }
     }
-    
-    // Update transaction status
-    await db.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
-    
-    const response = { message: `Transaction ${status} successfully` };
-    if (newBalance !== null) {
-      response.newBalance = newBalance;
-    }
-    
-    res.json(response);
+
+    // 🔵 For deposits or reject/pending cases — normal status update
+    await connection.query('UPDATE money_transactions SET status = ? WHERE id = ?', [status, id]);
+
+    res.json({ success: true, message: `Transaction ${status} successfully.` });
   } catch (error) {
-    console.error('Error updating transaction status:', error);
+    console.error('💥 Error updating transaction status:', error);
     res.status(500).json({ message: 'Error updating transaction status' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
@@ -352,257 +397,287 @@ router.put('/agent/commission/:id/status', async (req, res) => {
   }
 });
 
-
-const GATEWAY_BASE_URL = process.env.CLOUDPAY_BASE_URL;
-const MERCHANT_ID = process.env.CLOUDPAY_MERCHANT_ID;
-const API_TOKEN = process.env.CLOUDPAY_API_TOKEN;
-const PAYOUT_CALLBACK_URL = process.env.CLOUDPAY_PAYOUT_CALLBACK_URL;
-
-console.log("✅ CloudPay ENV loaded:", {
-  base: GATEWAY_BASE_URL,
-  merchant: MERCHANT_ID,
-  apiToken: API_TOKEN ? "OK" : "MISSING",
-  callback: PAYOUT_CALLBACK_URL
-});
-
-function generateSignature(canonicalString, token) {
-  if (!token) throw new Error("CLOUDPAY_API_TOKEN missing!");
-  return crypto.createHmac("sha256", token).update(canonicalString).digest("hex");
-}
-
-
-/**
- * ===========================================================
- * ✅ ADMIN CLOUDPAY PAYOUT (UPI/BANK for INR)
- * ===========================================================
- * Endpoint: https://api.cloudpay.space/payout/php
- * Canonical: merch_id|amount|acc_no|account_name|payment_method|account_type
- * Docs: https://cloudpay.space/web/docs#payout-php
- * ===========================================================
- */
-
+/* =====================================================
+ * 🏦 TopPay India — RSA 原始私钥加密签名 (非 SHA256withRSA)
+ * ===================================================== */
 router.post("/admin-payout", authenticateToken, async (req, res) => {
+  let connection;
   try {
-    const { transaction_id, amount, upi_id, account_name, acc_no } = req.body;
+    connection = await db.getConnection();
+
+    // ✅ Corrected destructuring + amount conversion
+    const { gateway, payment_method, userId, transaction_id, amount, bank_code, ifsc_code, acc_no, account_name } = req.body;
     const amt = parseFloat(amount);
 
+    // 🧠 Auto-detect gateway
+    const activeGateway = (gateway || payment_method || "").toLowerCase();
+
+    if (!["toppay"].includes(activeGateway)) {
+      return res.status(400).json({ success: false, message: "Unsupported gateway" });
+    }
+
+    // ✅ Validate amount
+    if (isNaN(amt) || amt <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid amount value" });
+    }
+
+  
+        // ✅ TopPay 密钥（PKCS8 私钥格式）
+        const privateKey = `
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCWW6LCzhvfkEwU
+s1iYkfTw4hKdVFy4+cJel1T4fqdTCMiKj/PvpQKxJB3cklH+uC6UEkMLiLojMARP
+Ti/6t3n/OFgGGVe1w1U1Ejx8Lx/7z2moYW9aOMBj4cNBaa6mJIMKVByZMswW3rT2
+Z4S7aV4U3z+JOCLd9gA6s6cYHQJcJMB8z80Qjy5eKjcoleaPVHqg5zg38SEQOjj8
+j0PbNyapaWFlLkZgNM2IFXgnUlLHyEW35aegiliZFr3DodX9pHOoL6LGpIlHZye3
+xSIjh4aWB1IXYVa6t8k0PFgl4Kqf0F6FZJRu5uwBRmvz1Q5jtRyXXMw/aTWnOTBR
+tyexq2B5AgMBAAECggEAZNPWdaQZdPYizs7l3ooiI1a2/OIRu8lg2mXJCUqFkl0V
+fjXCczXIdFmv3LYSXinMsmb8psNtbyNIAJaB/jMDkG6MOKrN8ommngw4m15OqGIS
+jGOqdGoSOeivMzJXd/qMFWUKOIGj8sItv/7zN2oVORHsXWxTlVzeEn9e0gDCEF9U
+Zzrt6zKnhwOxmfb1jR4dFtXfTjOa3GASXiJ0zP3x5W07Paf6eo3J9s7OXbkZZWvJ
+0ymppyuy29IFPDUhUKEQK0Y/W9xu1R9AdFEJQ4az2OLYbASfnrJ/3F6Pfr5qVuR2
+neQqb2K7Tf/Wt7m1Ry9Z+5HNfslwQoXy3IMge175wQKBgQD/+G7t8ggUtvxUkhBk
+kudSkCdB04Yktc2spPLUp0WVISOomaxypClZE5ewTBJ9fdooEwGZ2nKHuVt5oAfm
+H2zZTMrYs6AMq4IoP1TF92DVJ09sNVRGO+K5Nx9yBnzZ7gtqms9e4z2VorTrTnJa
+s1HxHgFQ2qqeq7tkyEftfffvbQKBgQCWYBSaZPYKSdfJe+LUAKVMGvwWhdwyD3kp
+NcY3zE+1QVn3RPnYkPYEASaJpEOLBCOSLMH19MFuFWkClRs+nNiaZtHvjVhaHZJX
+vABA1oXa4tTIXkI25fJn6D67T/uuFf2iMEfxjtjIyvFhAb7NUGjxBR0T4+xtTGZ8
+msIft+LxvQKBgQDyPuSEzkT1jcO6Kc3X0OuZSJHOi2ftgB1ZIXYq6O9CVm2P13fL
+uy7ifVdWYngxSZTXzjz6pTE036gBsAEpuV3jPPjQIxb6RqpUerM484gx0hUpPEM4
+gN5uGQvqdtdbzBwD1OUiUP7siWKdOs2gpwqKnbHzGi7VIYOkuqLP0SJ+9QKBgQCE
+mh8w8ryf3/PgIVWpOxSIIveO6OV+Y3SlKV0skQbsv78UtAdZuKKob1dLYsWIzdKM
+MNmtCPKVH14lP9Txhp/er7KKemqhtJf6s7bJdiI9HW8jbTMYc/cpN3wx8trt7Uhm
+gArA8QUrMwJdV4uoQzL27lpw0rkGvKtXT6TFEYOXRQKBgCWdYTeJe08xFzfsYyeO
+qFKQKs/05oS17mRQTxxbFqqcGr11vp5c/dkoWE28eBe7HN2XsRAi1mUN9FQfJvt4
+H6vZ7xYrnDnbXKtOCE/UMFkbROWOIn/5sBbNsCJzJdRCurrqvF5z8sTs8RQ20np7
+XN6EbGBGcXvslVKo8e2DhXYk
+-----END PRIVATE KEY-----
+`;
+
+        /* ----------------- 🔐 工具函数 ----------------- */
+        function buildSignString(params) {
+            return Object.keys(params)
+                .filter((key) => key !== "sign" && params[key] !== undefined && params[key] !== "")
+                .sort()
+                .map((key) => `${key}=${params[key]}`)
+                .join("&");
+        }
+
+        function rsaPrivateEncrypt(data, privateKeyPem) {
+            const buffer = Buffer.from(data, "utf8");
+            const maxBlock = 245;
+            const chunks = [];
+            for (let offset = 0; offset < buffer.length; offset += maxBlock) {
+                const chunk = buffer.slice(offset, offset + maxBlock);
+                const encrypted = crypto.privateEncrypt(
+                    {
+                        key: privateKeyPem,
+                        padding: crypto.constants.RSA_PKCS1_PADDING,
+                    },
+                    chunk
+                );
+                chunks.push(encrypted);
+            }
+            return Buffer.concat(chunks).toString("base64");
+        }
+
+       /* ----------------- 📦 构造参数 ----------------- */
+// ✅ Use real current Unix timestamp (integer seconds)
+const currentTimestamp = Math.floor(Date.now() / 1000);
+
+// ✅ Validate and format amount (TopPay does NOT support decimals)
+const cleanAmt = Math.floor(amt); // Convert 100.50 -> 100
+
+if (isNaN(cleanAmt) || cleanAmt < 100) {
+  return res.status(400).json({
+    success: false,
+    message: "Invalid amount (TopPay does not support decimals, min ₹100)",
+  });
+}
+
+const params = {
+  merchantCode: process.env.TOPPAY_MERCHANT_CODE,
+  orderNum: transaction_id,
+  bankCode: (ifsc_code || bank_code || "").trim(),
+  bankAccount: (acc_no || "").trim(),
+  bankUsername: (account_name || "User").trim(),
+  orderAmount: cleanAmt, // ✅ integer only (no decimals)
+  callback: process.env.TOPPAY_PAYOUT_NOTIFY_URL,
+  timestamp: currentTimestamp, // ✅ Unix timestamp (seconds)
+};
+
+const signString = buildSignString(params);
+params.sign = rsaPrivateEncrypt(signString, privateKey);
+
+console.log("🔐 TopPay Sign String:", signString);
+console.log("🖋️ Signature (RSA Encrypted):", params.sign);
+
+        /* ----------------- 🚀 发送请求 ----------------- */
+        const apiURL = `${process.env.TOPPAY_BASE_URL}/cash/newOrder`;
+        const topResp = await axios.post(apiURL, params, {
+            headers: { "Content-Type": "application/json" },
+            timeout: 15000,
+        });
+
+        console.log("📦 TopPay Response:", topResp.data);
+
+        if (topResp.data.code !== 0) {
+            throw new Error(topResp.data.message || "TopPay payout failed.");
+        }
+
+        // ✅ 更新数据库状态
+        await connection.query(
+            "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?",
+            [amt, userId]
+        );
+
+        await connection.query(
+            `UPDATE money_transactions 
+       SET status='processing', remarks='Payout sent to TopPay', payout_response=?, updated_at=NOW()
+       WHERE transaction_id=?`,
+            [JSON.stringify(topResp.data), transaction_id]
+        );
+
+        return res.json({
+            success: true,
+            message: "Payout sent to TopPay successfully.",
+            data: topResp.data,
+        });
+    } catch (err) {
+        console.error("💥 Admin payout error:", err.message);
+        return res.status(500).json({
+            success: false,
+            message: err.message || "Payout failed",
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+
+
+router.post("/admin-payout", authenticateToken, async (req, res) => {
+  const {
+    transaction_id,
+    amount,
+    upi_id,
+    account_name,
+    acc_no,
+    bank_code,
+    ifsc_code,
+    payment_method,
+  } = req.body;
+
+  const amt = parseFloat(amount);
+  let connection;
+
+  try {
     if (!transaction_id)
-      return res.status(400).json({ success: false, message: "Transaction ID required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Transaction ID required" });
 
     if (isNaN(amt) || amt < 100)
-      return res.status(400).json({ success: false, message: "Minimum payout ₹100" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Minimum payout ₹100" });
 
-    const [tx] = await db.query(
-      `SELECT user_id FROM money_transactions WHERE transaction_id=? OR id=? LIMIT 1`,
-      [transaction_id, transaction_id]
+    connection = await db.getConnection();
+
+    // 🔍 Fetch transaction
+    const [tx] = await connection.query(
+      "SELECT * FROM money_transactions WHERE transaction_id=? LIMIT 1",
+      [transaction_id]
     );
 
     if (!tx.length)
-      return res.status(404).json({ success: false, message: "Transaction not found" });
-
-    const userId = tx[0].user_id;
-
-    // ✅ Prepare payout payload
-    const payoutBody = {
-      merch_id: MERCHANT_ID,
-      amount: amt,
-      acc_no: upi_id?.trim() || acc_no?.trim(),
-      account_name: account_name || "User",
-      payment_method: upi_id ? "UPI" : "BANK",
-      account_type: "PERSONAL_BANK",
-    };
-
-    if (!payoutBody.acc_no)
-      throw new Error("UPI ID or Bank Account Number required for payout.");
-
-    // ✅ Canonical + Signature
-    const canonical = `merch_id=${payoutBody.merch_id}|amount=${payoutBody.amount}|acc_no=${payoutBody.acc_no}|account_name=${payoutBody.account_name}|payment_method=${payoutBody.payment_method.toUpperCase()}|account_type=${payoutBody.account_type}`;
-    const sign = generateSignature(canonical, API_TOKEN);
-
-    console.log("📦 CloudPay Payout Payload:", payoutBody);
-    console.log("🧾 Canonical:", canonical);
-    console.log("🔐 Signature:", sign);
-
-    // ✅ POST to CloudPay
-    const response = await axios.post(`${GATEWAY_BASE_URL}/payout/php`, payoutBody, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-Verify": sign,
-      },
-    });
-
-    console.log("💸 CloudPay Payout Response:", response.data);
-
-    if (!response.data.status)
-      throw new Error(response.data.message || "CloudPay payout failed");
-
-    await db.query(
-      `UPDATE money_transactions 
-       SET status='processing', remarks='Admin payout initiated (CloudPay)', updated_at=NOW() 
-       WHERE transaction_id=? OR id=?`,
-      [transaction_id, transaction_id]
-    );
-
-    res.json({
-      success: true,
-      message: "✅ CloudPay payout initiated successfully",
-      data: response.data,
-    });
-  } catch (err) {
-    console.error("❌ Admin Payout Error:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      message: err.response?.data?.message || err.message || "Failed to initiate payout",
-    });
-  }
-});
-
-/**
- * ===========================================================
- * ✅ ADMIN CLOUDPAY PAYOUT STATUS CHECK
- * ===========================================================
- * Endpoint: https://api.cloudpay.space/api/v1/payout-status
- * Canonical: merch_id|withdraw_id|payout_type
- * payout_type = "bank" for INR/UPI
- * ===========================================================
- */
-
-router.post("/admin-payout-status", authenticateToken, async (req, res) => {
-  try {
-    const { withdraw_id } = req.body;
-
-    if (!withdraw_id)
-      return res.status(400).json({ success: false, message: "withdraw_id required" });
-
-    const body = {
-      merch_id: MERCHANT_ID,
-      withdraw_id,
-      payout_type: "bank",
-    };
-
-    const canonical = `merch_id=${body.merch_id}|withdraw_id=${body.withdraw_id}|payout_type=${body.payout_type}`;
-    const sign = generateSignature(canonical, API_TOKEN);
-
-    console.log("🧾 Canonical:", canonical);
-    console.log("🔐 Signature:", sign);
-
-    const response = await axios.post(`${GATEWAY_BASE_URL}/api/v1/payout-status`, body, {
-      headers: { "Content-Type": "application/json", "X-Verify": sign },
-    });
-
-    console.log("💸 CloudPay Payout Status:", response.data);
-
-    if (!response.data.status)
-      return res.status(400).json({
-        success: false,
-        message: response.data.message || "Failed to fetch payout status",
-      });
-
-    const txnStatus = (response.data.result?.txnStatus || "").toUpperCase();
-    const newStatus = txnStatus === "SUCCESS" ? "completed" : txnStatus === "FAILURE" ? "failed" : "processing";
-
-    await db.query(
-      `UPDATE money_transactions 
-       SET status=?, remarks='Payout ${txnStatus.toLowerCase()} (manual check)', updated_at=NOW()
-       WHERE transaction_id=? OR remarks LIKE ?`,
-      [newStatus, withdraw_id, `%${withdraw_id}%`]
-    );
-
-    res.json({
-      success: true,
-      message: "✅ Payout status fetched successfully",
-      data: response.data.result,
-    });
-  } catch (err) {
-    console.error("💥 Payout Status Error:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      message: err.response?.data?.message || err.message || "Failed to fetch payout status",
-    });
-  }
-});
-
-/**
- * ===========================================================
- * ✅ SECURE CLOUDPAY PAYOUT CALLBACK (WEBHOOK)
- * ===========================================================
- * Verifies CloudPay's HMAC-SHA256 signature.
- * Always return 200 OK to avoid duplicate retries.
- * ===========================================================
- */
-
-router.post("/upi/payout-callback", async (req, res) => {
-  try {
-    console.log("📥 CloudPay Callback received:", req.body);
-    const { withdraw_id, txnStatus, amount, sign } = req.body;
-
-    if (!withdraw_id) return res.status(200).send("OK");
-
-    const canonical = `merch_id=${MERCHANT_ID}|withdraw_id=${withdraw_id}|payout_type=bank`;
-    const expectedSign = generateSignature(canonical, API_TOKEN);
-
-    if (!sign || sign.toLowerCase() !== expectedSign.toLowerCase()) {
-      console.warn("🚨 Invalid signature in CloudPay callback!");
-      return res.status(403).send("Invalid signature");
-    }
-
-    console.log("✅ Verified CloudPay signature");
-    const status = (txnStatus || "").toUpperCase();
-
-    const [tx] = await db.query(
-      `SELECT * FROM money_transactions WHERE transaction_id=? OR remarks LIKE ? LIMIT 1`,
-      [withdraw_id, `%${withdraw_id}%`]
-    );
-
-    if (!tx.length) {
-      console.warn(`⚠️ No transaction found for withdraw_id ${withdraw_id}`);
-      return res.status(200).send("OK");
-    }
+      return res
+        .status(404)
+        .json({ success: false, message: "Transaction not found" });
 
     const txn = tx[0];
     const userId = txn.user_id;
 
-    if (status === "SUCCESS") {
-      await db.query(
-        `UPDATE money_transactions SET status='completed', remarks='Payout success (callback verified)', updated_at=NOW() WHERE id=?`,
-        [txn.id]
-      );
-      console.log(`✅ Payout SUCCESS for ${withdraw_id}`);
-    } else if (["FAILURE", "FAILED"].includes(status)) {
-      const [alreadyRefunded] = await db.query(
-        `SELECT id FROM refund_log WHERE transaction_id=? LIMIT 1`,
-        [txn.id]
+    console.log(`🟢 Initiating payout for CLOUDPAY | Transaction: ${transaction_id}`);
+
+    /* ===================== 🌩️ CLOUDPAY Payout ===================== */
+    const payoutBody = {
+      merch_id: process.env.CLOUDPAY_MERCHANT_ID,
+      amount: parseInt(amt, 10), // ⚠️ must be integer
+      account_name: account_name || "User",
+      payment_method: upi_id ? "UPI" : "BANK", // UPI or BANK
+      acc_no: upi_id ? upi_id.trim() : acc_no,
+      account_type: "PERSONAL_BANK", // Always required
+    };
+
+    const canonical = `merch_id=${payoutBody.merch_id}|amount=${payoutBody.amount}|acc_no=${payoutBody.acc_no}|account_name=${payoutBody.account_name}|payment_method=${payoutBody.payment_method.toUpperCase()}|account_type=${payoutBody.account_type}`;
+
+    const sign = crypto
+      .createHmac("sha256", process.env.CLOUDPAY_API_TOKEN)
+      .update(canonical)
+      .digest("hex");
+
+    console.log("🟢 Sending Payout to CloudPay:", payoutBody);
+    console.log("🔐 Canonical:", canonical);
+    console.log("🔏 Signature:", sign);
+
+    try {
+      const response = await axios.post(
+        `${process.env.CLOUDPAY_BASE_URL || "https://api.cloudpay.space"}/payout/php`,
+        payoutBody,
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "X-Verify": sign,
+          },
+          timeout: 20000,
+        }
       );
 
-      if (!alreadyRefunded.length) {
-        await db.query(
-          `UPDATE users SET wallet_balance = wallet_balance + ? WHERE id=?`,
-          [amount || txn.amount, userId]
+      console.log("📦 CloudPay Payout Response:", response.data);
+
+      if (!response.data.status) {
+        await connection.query(
+          "UPDATE money_transactions SET status='failed', remarks=?, updated_at=NOW() WHERE transaction_id=?",
+          [response.data.message || "CloudPay payout failed", transaction_id]
         );
-        await db.query(
-          `INSERT INTO refund_log (transaction_id, user_id, amount, created_at) VALUES (?, ?, ?, NOW())`,
-          [txn.id, userId, amount || txn.amount]
-        );
-        console.log(`💰 Refunded ₹${amount || txn.amount} for failed payout ${withdraw_id}`);
-      } else {
-        console.log(`⚠️ Duplicate refund prevented for ${withdraw_id}`);
+        throw new Error(response.data.message || "CloudPay payout failed");
       }
 
-      await db.query(
-        `UPDATE money_transactions SET status='failed', remarks='Payout failed (callback verified)', updated_at=NOW() WHERE id=?`,
-        [txn.id]
+      // ✅ Deduct wallet & mark transaction as processing
+      await connection.query(
+        "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?",
+        [amt, userId]
       );
-    } else if (status === "PROCESSING") {
-      await db.query(
-        `UPDATE money_transactions SET status='processing', remarks='Payout processing (callback verified)', updated_at=NOW() WHERE id=?`,
-        [txn.id]
-      );
-    }
 
-    res.status(200).send("OK");
+      await connection.query(
+        `UPDATE money_transactions 
+         SET status='processing', remarks='Payout sent to CloudPay', payout_response=?, updated_at=NOW()
+         WHERE transaction_id=?`,
+        [JSON.stringify(response.data), transaction_id]
+      );
+
+      return res.json({
+        success: true,
+        message: "Payout sent to CloudPay successfully.",
+        data: response.data,
+      });
+    } catch (err) {
+      console.error("💥 CloudPay Payout Error:", err.response?.data || err.message);
+      return res.status(500).json({
+        success: false,
+        message: err.response?.data?.message || "CloudPay request failed",
+        details: err.response?.data,
+      });
+    }
   } catch (err) {
-    console.error("💥 Callback Error:", err.message);
-    res.status(200).send("OK");
+    console.error("💥 Admin payout error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Payout failed",
+    });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
