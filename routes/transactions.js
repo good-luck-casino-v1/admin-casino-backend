@@ -62,26 +62,61 @@ router.get('/', async (req, res) => {
     
  const [rows] = await db.query(query, params);
 
-const rowsWithUrls = rows.map(tx => {
-  let screenshotUrl = null;
-  if (tx.screenshot) {
-    screenshotUrl = tx.screenshot.startsWith("http")
-      ? tx.screenshot
-      : `${process.env.SPACES_CDN}/${tx.screenshot}`;
-  }
+// const rowsWithUrls = rows.map(tx => {
+//   let screenshotUrl = null;
+//   if (tx.screenshot) {
+//     screenshotUrl = tx.screenshot.startsWith("http")
+//       ? tx.screenshot
+//       : `${process.env.SPACES_CDN}/${tx.screenshot}`;
+//   }
 
-  // ✅ Hide payment_method details for deposits only
-  const sanitizedTx = { ...tx };
-  if (tx.type === 'deposit') {
-    delete sanitizedTx.payment_method;   // Remove field entirely
-    delete sanitizedTx.gateway_name;     // Optional: if you have multiple fields
-  }
+//   // ✅ Hide payment_method details for deposits only
+//   const sanitizedTx = { ...tx };
+//   if (tx.type === 'deposit') {
+//     delete sanitizedTx.payment_method;   // Remove field entirely
+//     delete sanitizedTx.gateway_name;     // Optional: if you have multiple fields
+//   }
 
-  return { ...sanitizedTx, screenshot_url: screenshotUrl };
-});
+//   return { ...sanitizedTx, screenshot_url: screenshotUrl };
+// });
 
-res.json(rowsWithUrls);
+// res.json(rowsWithUrls);
 
+// ✅ Filter out invalid or disallowed deposits before mapping
+  const filteredRows = rows.filter(tx => {
+    if (
+      tx.type === 'deposit' &&
+      (
+        !tx.payment_method ||                      // null or undefined
+        tx.payment_method.trim() === '' ||         // empty string
+        tx.payment_method.trim() === '—' ||        // dash shown in UI
+        ['cloudpay', 'toppay'].includes(tx.payment_method.toLowerCase()) // specific gateways
+      )
+    ) {
+      return false; // exclude this deposit completely
+    }
+    return true;
+  });
+
+  // ✅ Add screenshot URLs + clean up deposits
+  const rowsWithUrls = filteredRows.map(tx => {
+    let screenshotUrl = null;
+    if (tx.screenshot) {
+      screenshotUrl = tx.screenshot.startsWith("http")
+        ? tx.screenshot
+        : `${process.env.SPACES_CDN}/${tx.screenshot}`;
+    }
+
+    const sanitizedTx = { ...tx };
+    if (tx.type === 'deposit') {
+      delete sanitizedTx.payment_method;
+      delete sanitizedTx.gateway_name;
+    }
+
+    return { ...sanitizedTx, screenshot_url: screenshotUrl };
+  });
+
+  res.json(rowsWithUrls);
 
 
   } catch (error) {
@@ -396,11 +431,10 @@ router.put('/agent/commission/:id/status', async (req, res) => {
     res.status(500).json({ message: 'Error updating agent withdraw status' });
   }
 });
-
 /* =====================================================
  * 🏦 TopPay India — RSA 原始私钥加密签名 (非 SHA256withRSA)
  * ===================================================== */
-router.post("/admin-payout", authenticateToken, async (req, res) => {
+router.post("/admin-payout-toppay",async (req, res) => {
   let connection;
   try {
     connection = await db.getConnection();
@@ -409,13 +443,19 @@ router.post("/admin-payout", authenticateToken, async (req, res) => {
     const { gateway, payment_method, userId, transaction_id, amount, bank_code, ifsc_code, acc_no, account_name } = req.body;
     const amt = parseFloat(amount);
 
-    // 🧠 Auto-detect gateway
-    const activeGateway = (gateway || payment_method || "").toLowerCase();
 
-    if (!["toppay"].includes(activeGateway)) {
-      return res.status(400).json({ success: false, message: "Unsupported gateway" });
-    }
+ // 🧠 Auto-detect gateway
+const activeGateway = (gateway || payment_method || "").toLowerCase();
 
+// ✅ Support multiple gateways
+if (!["toppay", "cloudpay"].includes(activeGateway)) {
+  console.warn(`⚠️ Unsupported gateway '${activeGateway}', marking as manual payout.`);
+  return res.status(200).json({
+    success: true,
+    message: `Unsupported gateway '${activeGateway}'. Marked as manual payout.`,
+  });
+}
+    console.log(`🚀 Initiating payout via TopPay | Transaction: ${transaction_id} | Amount: ₹${amt}`);
     // ✅ Validate amount
     if (isNaN(amt) || amt <= 0) {
       return res.status(400).json({ success: false, message: "Invalid amount value" });
@@ -556,7 +596,7 @@ console.log("🖋️ Signature (RSA Encrypted):", params.sign);
 
 
 
-router.post("/admin-payout", authenticateToken, async (req, res) => {
+router.post("/admin-payout", async (req, res) => {
   const {
     transaction_id,
     amount,
