@@ -215,168 +215,168 @@ router.put("/tickets/:id/status", async (req, res) => {
   }
 });
 
-router.put("/transactions/:id/status", async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
+// router.put("/transactions/:id/status", async (req, res) => {
+//   const { id } = req.params;
+//   const { status } = req.body;
 
-  if (!["completed", "rejected"].includes(status)) {
-    return res.status(400).json({ success: false, message: "Invalid status value" });
-  }
+//   if (!["completed", "rejected"].includes(status)) {
+//     return res.status(400).json({ success: false, message: "Invalid status value" });
+//   }
 
-  let connection;
-  try {
-    connection = await db.getConnection();
+//   let connection;
+//   try {
+//     connection = await db.getConnection();
 
-    const [txResults] = await connection.query(
-      "SELECT * FROM money_transactions WHERE id = ?",
-      [id]
-    );
-    if (txResults.length === 0) {
-      return res.status(404).json({ success: false, message: "Transaction not found" });
-    }
+//     const [txResults] = await connection.query(
+//       "SELECT * FROM money_transactions WHERE id = ?",
+//       [id]
+//     );
+//     if (txResults.length === 0) {
+//       return res.status(404).json({ success: false, message: "Transaction not found" });
+//     }
 
-    const tx = txResults[0];
-    const amount = parseFloat(tx.amount);
-    const type = tx.type.toLowerCase();
-    const method = (tx.payment_method || "").toLowerCase();
-    const userId = tx.user_id;
+//     const tx = txResults[0];
+//     const amount = parseFloat(tx.amount);
+//     const type = tx.type.toLowerCase();
+//     const method = (tx.payment_method || "").toLowerCase();
+//     const userId = tx.user_id;
 
-    await connection.beginTransaction();
+//     await connection.beginTransaction();
 
-    // ❌ Reject
-    if (status === "rejected") {
-      await connection.query(
-        "UPDATE money_transactions SET status='rejected', updated_at=NOW() WHERE id=?",
-        [id]
-      );
-      await connection.commit();
-      return res.json({
-        success: true,
-        message: "Transaction rejected successfully"
-      });
-    }
+//     // ❌ Reject
+//     if (status === "rejected") {
+//       await connection.query(
+//         "UPDATE money_transactions SET status='rejected', updated_at=NOW() WHERE id=?",
+//         [id]
+//       );
+//       await connection.commit();
+//       return res.json({
+//         success: true,
+//         message: "Transaction rejected successfully"
+//       });
+//     }
 
-    // ✅ BANK DEPOSIT
-    if (type === "deposit" && method === "bank") {
-      await connection.query(
-        "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?",
-        [amount, userId]
-      );
+//     // ✅ BANK DEPOSIT
+//     if (type === "deposit" && method === "bank") {
+//       await connection.query(
+//         "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?",
+//         [amount, userId]
+//       );
 
-      await connection.query(
-        "UPDATE money_transactions SET status='completed', remarks='Bank deposit credited', updated_at=NOW() WHERE id=?",
-        [id]
-      );
+//       await connection.query(
+//         "UPDATE money_transactions SET status='completed', remarks='Bank deposit credited', updated_at=NOW() WHERE id=?",
+//         [id]
+//       );
 
-      await connection.commit();
-      return res.json({
-        success: true,
-        message: `₹${amount} credited to wallet (Bank Deposit)`
-      });
-    }
+//       await connection.commit();
+//       return res.json({
+//         success: true,
+//         message: `₹${amount} credited to wallet (Bank Deposit)`
+//       });
+//     }
 
-    // ✅ BANK WITHDRAW
-    if (type === "withdraw" && method === "bank") {
-      await connection.query(
-        "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?",
-        [amount, userId]
-      );
+//     // ✅ BANK WITHDRAW
+//     if (type === "withdraw" && method === "bank") {
+//       await connection.query(
+//         "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?",
+//         [amount, userId]
+//       );
 
-      await connection.query(
-        "UPDATE money_transactions SET status='completed', remarks='Bank withdraw debited', updated_at=NOW() WHERE id=?",
-        [id]
-      );
+//       await connection.query(
+//         "UPDATE money_transactions SET status='completed', remarks='Bank withdraw debited', updated_at=NOW() WHERE id=?",
+//         [id]
+//       );
 
-      await connection.commit();
-      return res.json({
-        success: true,
-        message: `₹${amount} withdrawn from wallet (Bank Withdraw)`
-      });
-    }
+//       await connection.commit();
+//       return res.json({
+//         success: true,
+//         message: `₹${amount} withdrawn from wallet (Bank Withdraw)`
+//       });
+//     }
 
-    // ✅ GATEWAY WITHDRAW (TOPPAY / CLOUDPAY)
-    if (type === "withdraw" && (method === "toppay" || method === "cloudpay")) {
+//     // ✅ GATEWAY WITHDRAW (TOPPAY / CLOUDPAY)
+//     if (type === "withdraw" && (method === "toppay" || method === "cloudpay")) {
 
-      // Deduct balance first
-      await connection.query(
-        "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id=?",
-        [amount, userId]
-      );
+//       // Deduct balance first
+//       await connection.query(
+//         "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id=?",
+//         [amount, userId]
+//       );
 
-      await connection.query(
-        "UPDATE money_transactions SET status='processing', updated_at=NOW() WHERE id=?",
-        [id]
-      );
+//       await connection.query(
+//         "UPDATE money_transactions SET status='processing', updated_at=NOW() WHERE id=?",
+//         [id]
+//       );
 
-      await connection.commit();
+//       await connection.commit();
 
-      const payoutURL =
-        method === "toppay"
-          ? `${process.env.BASE_URL}/api/transactions/admin-payout-toppay`
-          : `${process.env.BASE_URL}/api/transactions/admin-payout`;
+//       const payoutURL =
+//         method === "toppay"
+//           ? `${process.env.BASE_URL}/api/transactions/admin-payout-toppay`
+//           : `${process.env.BASE_URL}/api/transactions/admin-payout`;
 
-      const payoutData = {
-        transaction_id: tx.transaction_id,
-        amount,
-        userId,
-        payment_method: method,
-        bank_code: tx.bank_code,
-        ifsc_code: tx.ifsc_code,
-        acc_no: tx.account_number,
-        account_name: tx.account_name,
-        upi_id: tx.upi_id,
-      };
+//       const payoutData = {
+//         transaction_id: tx.transaction_id,
+//         amount,
+//         userId,
+//         payment_method: method,
+//         bank_code: tx.bank_code,
+//         ifsc_code: tx.ifsc_code,
+//         acc_no: tx.account_number,
+//         account_name: tx.account_name,
+//         upi_id: tx.upi_id,
+//       };
 
-      try {
-        const payoutRes = await axios.post(
-          payoutURL,
-          payoutData,
-          { headers: { Authorization: req.headers.authorization } }
-        );
+//       try {
+//         const payoutRes = await axios.post(
+//           payoutURL,
+//           payoutData,
+//           { headers: { Authorization: req.headers.authorization } }
+//         );
 
-        await db.query(
-          "UPDATE money_transactions SET status='completed', remarks='Gateway payout successful', payout_response=?, updated_at=NOW() WHERE id=?",
-          [JSON.stringify(payoutRes.data), id]
-        );
+//         await db.query(
+//           "UPDATE money_transactions SET status='completed', remarks='Gateway payout successful', payout_response=?, updated_at=NOW() WHERE id=?",
+//           [JSON.stringify(payoutRes.data), id]
+//         );
 
-        return res.json({
-          success: true,
-          message: `Payout sent successfully using ${method.toUpperCase()}`
-        });
+//         return res.json({
+//           success: true,
+//           message: `Payout sent successfully using ${method.toUpperCase()}`
+//         });
 
-      } catch (err) {
+//       } catch (err) {
 
-        // REFUND ON FAILURE
-        await db.query(
-          "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id=?",
-          [amount, userId]
-        );
+//         // REFUND ON FAILURE
+//         await db.query(
+//           "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id=?",
+//           [amount, userId]
+//         );
 
-        await db.query(
-          "UPDATE money_transactions SET status='failed', remarks='Gateway failed — refunded', updated_at=NOW() WHERE id=?",
-          [id]
-        );
+//         await db.query(
+//           "UPDATE money_transactions SET status='failed', remarks='Gateway failed — refunded', updated_at=NOW() WHERE id=?",
+//           [id]
+//         );
 
-        return res.json({
-          success: false,
-          message: `Payout failed. ₹${amount} refunded back to wallet`
-        });
-      }
-    }
+//         return res.json({
+//           success: false,
+//           message: `Payout failed. ₹${amount} refunded back to wallet`
+//         });
+//       }
+//     }
 
-    return res.status(400).json({
-      success: false,
-      message: "This transaction type is not allowed"
-    });
+//     return res.status(400).json({
+//       success: false,
+//       message: "This transaction type is not allowed"
+//     });
 
-  } catch (error) {
-    if (connection) await connection.rollback();
-    return res.status(500).json({ success: false, message: "Server error" });
+//   } catch (error) {
+//     if (connection) await connection.rollback();
+//     return res.status(500).json({ success: false, message: "Server error" });
 
-  } finally {
-    if (connection) connection.release();
-  }
-});
+//   } finally {
+//     if (connection) connection.release();
+//   }
+// });
 
 
 // PUT /api/users/:id/wallet - Update wallet balance and record transaction

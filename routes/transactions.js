@@ -100,23 +100,33 @@ router.get("/", async (req, res) => {
       if (txType === "withdraw" || txType === "withdrawal") return true;
 
       // Deposit -> only allow BANK deposits
-      if (txType === "deposit") {
-        // If payment_method explicitly contains 'bank' or 'bank transfer' accept it
-        if (method.includes("bank")) return true;
+     // Deposit -> allow BANK + USDT deposits
+if (txType === "deposit") {
 
-        // If payment_method is something like 'bank transfer' spelled differently
-        if (
-          method.includes("bank transfer") ||
-          method.includes("bank_transfer")
-        )
-          return true;
+  // ✅ Allow BANK deposits
+  if (
+    method.includes("bank") ||
+    method.includes("bank transfer") ||
+    method.includes("bank_transfer") ||
+    looksLikeBank(tx)
+  ) {
+    return true;
+  }
 
-        // If payment details contain bank fields, treat as bank deposit
-        if (looksLikeBank(tx)) return true;
+  // ✅ Allow USDT / CRYPTO deposits
+  if (
+    method.includes("usdt") ||
+    method.includes("crypto") ||
+    method.includes("tron") ||
+    method.includes("trc")
+  ) {
+    return true;
+  }
 
-        // Otherwise reject deposit (gateway deposit / upi deposit / cash / unknown)
-        return false;
-      }
+  // Block other deposit types like cash, toppay etc
+  return false;
+}
+
 
       // For any other types keep (safe fallback)
       return false;
@@ -151,8 +161,13 @@ router.get("/", async (req, res) => {
           sanitized.payment_method = "Bank Transfer";
         else sanitized.payment_method = tx.payment_method || "Withdraw";
       } else if (tx.type && tx.type.toString().toLowerCase() === "deposit") {
-        sanitized.payment_method = "Bank Transfer";
-      }
+  if (method.includes("usdt") || method.includes("crypto")) {
+    sanitized.payment_method = "USDT";
+  } else {
+    sanitized.payment_method = "Bank Transfer";
+  }
+}
+
 
       return { ...sanitized, screenshot_url: screenshotUrl };
     });
@@ -470,9 +485,201 @@ router.put("/agent/commission/:id/status", async (req, res) => {
     res.status(500).json({ message: "Error updating agent withdraw status" });
   }
 });
-/* =====================================================
- * 🏦 TopPay India — RSA 原始私钥加密签名 (非 SHA256withRSA)
- * ===================================================== */
+
+router.put("/transactions/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!["completed", "rejected"].includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid status value"
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // LOCK row
+    const [txResults] = await connection.query(
+      "SELECT * FROM money_transactions WHERE id = ? FOR UPDATE",
+      [id]
+    );
+    if (txResults.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    const tx = txResults[0];
+    const amount = parseFloat(tx.amount);
+    const type = (tx.type || "").toLowerCase();
+    let method = (tx.payment_method || "").toLowerCase();   // MAIN COLUMN
+    const userId = tx.user_id;
+
+    const isUPI = tx.upi_id && tx.upi_id !== "";
+    const isBank =
+      (tx.account_number || tx.acc_no) &&
+      (tx.bank_code || "") &&
+      (tx.ifsc_code || "");
+
+    /** ===============================
+     *  QUICK REJECT
+     *  =============================== */
+    if (status === "rejected") {
+      await connection.query(
+        "UPDATE money_transactions SET status='rejected', updated_at=NOW() WHERE id=?",
+        [id]
+      );
+      await connection.commit();
+      return res.json({ success: true, message: "Transaction rejected successfully" });
+    }
+
+    /** ===============================
+     *  BANK DEPOSIT
+     *  =============================== */
+    if (type === "deposit" && method === "bank") {
+      await connection.query(
+        "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?",
+        [amount, userId]
+      );
+
+      await connection.query(
+        "UPDATE money_transactions SET status='completed', remarks='Bank deposit credited', updated_at=NOW() WHERE id=?",
+        [id]
+      );
+
+      await connection.commit();
+      return res.json({
+        success: true,
+        message: `₹${amount} credited to wallet (Bank Deposit)`
+      });
+    }
+
+    /** ===============================
+     *  BANK WITHDRAW
+     *  =============================== */
+    if (type === "withdraw" && method === "bank") {
+      await connection.query(
+        "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?",
+        [amount, userId]
+      );
+
+      await connection.query(
+        "UPDATE money_transactions SET status='completed', remarks='Bank withdraw debited', updated_at=NOW() WHERE id=?",
+        [id]
+      );
+
+      await connection.commit();
+      return res.json({
+        success: true,
+        message: `₹${amount} withdrawn from wallet (Bank Withdraw)`
+      });
+    }
+
+    /** ==============================================
+     *  GATEWAY WITHDRAW — AUTO DETECT SAFE GATEWAY
+     *  ============================================== */
+
+    if (type === "withdraw" && (method === "gateway" || method === "toppay" || method === "cloudpay")) {
+
+      /** 🚀 AUTO FIX: UPI → CloudPay ONLY */
+      if (isUPI) method = "cloudpay";
+
+      /** 🚀 AUTO FIX: BANK → TopPay default */
+      if (isBank && method === "gateway") method = "toppay";
+
+      // Deduct money now
+      await connection.query(
+        "UPDATE users SET wallet_balance = wallet_balance - ? WHERE id=?",
+        [amount, userId]
+      );
+
+      await connection.query(
+        "UPDATE money_transactions SET status='processing', updated_at=NOW() WHERE id=?",
+        [id]
+      );
+
+      await connection.commit();
+
+      // URL select
+      const payoutURL =
+        method === "toppay"
+          ? `${process.env.BASE_URL}/api/transactions/admin-payout-toppay`
+          : `${process.env.BASE_URL}/api/transactions/admin-payout`;
+
+      // Payload
+      const payoutData = {
+        transaction_id: tx.transaction_id,
+        amount,
+        userId,
+        payment_method: method,
+        bank_code: tx.bank_code || "",
+        ifsc_code: tx.ifsc_code || "",
+        acc_no: tx.account_number || tx.acc_no || "",
+        account_name: tx.account_name || "User",
+        upi_id: tx.upi_id || ""
+      };
+
+      try {
+        const payoutRes = await axios.post(
+          payoutURL,
+          payoutData,
+          { headers: { Authorization: req.headers.authorization || "" }, timeout: 30000 }
+        );
+
+        const conn2 = await db.getConnection();
+        await conn2.query(
+          "UPDATE money_transactions SET status='completed', remarks='Gateway payout successful', payout_response=?, updated_at=NOW() WHERE id=?",
+          [JSON.stringify(payoutRes.data), id]
+        );
+        conn2.release();
+
+        return res.json({
+          success: true,
+          message: `Payout sent successfully using ${method.toUpperCase()}`
+        });
+
+      } catch (err) {
+        console.error("Gateway payout error:", err.response?.data || err.message);
+
+        const conn3 = await db.getConnection();
+        await conn3.beginTransaction();
+
+        await conn3.query(
+          "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id=?",
+          [amount, userId]
+        );
+
+        await conn3.query(
+          "UPDATE money_transactions SET status='failed', remarks='Gateway failed — refunded', payout_response=?, updated_at=NOW() WHERE id=?",
+          [JSON.stringify(err.response?.data || err.message), id]
+        );
+
+        await conn3.commit();
+        conn3.release();
+
+        return res.status(500).json({
+          success: false,
+          message: `Payout failed. ₹${amount} refunded back to wallet`
+        });
+      }
+    }
+
+    await connection.rollback();
+    return res.status(400).json({ success: false, message: "This transaction type is not allowed" });
+
+  } catch (error) {
+    console.error("PUT /transactions/:id/status error:", error);
+    if (connection) await connection.rollback();
+    return res.status(500).json({ success: false, message: "Server error" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+
 router.post("/admin-payout-toppay", async (req, res) => {
   let connection;
   try {
