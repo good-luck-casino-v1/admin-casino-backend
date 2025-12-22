@@ -725,32 +725,32 @@ router.post("/admin-payout-toppay", async (req, res) => {
     // ✅ TopPay 密钥（PKCS8 私钥格式）
     const privateKey = `
 -----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCWW6LCzhvfkEwU
-s1iYkfTw4hKdVFy4+cJel1T4fqdTCMiKj/PvpQKxJB3cklH+uC6UEkMLiLojMARP
-Ti/6t3n/OFgGGVe1w1U1Ejx8Lx/7z2moYW9aOMBj4cNBaa6mJIMKVByZMswW3rT2
-Z4S7aV4U3z+JOCLd9gA6s6cYHQJcJMB8z80Qjy5eKjcoleaPVHqg5zg38SEQOjj8
-j0PbNyapaWFlLkZgNM2IFXgnUlLHyEW35aegiliZFr3DodX9pHOoL6LGpIlHZye3
-xSIjh4aWB1IXYVa6t8k0PFgl4Kqf0F6FZJRu5uwBRmvz1Q5jtRyXXMw/aTWnOTBR
-tyexq2B5AgMBAAECggEAZNPWdaQZdPYizs7l3ooiI1a2/OIRu8lg2mXJCUqFkl0V
-fjXCczXIdFmv3LYSXinMsmb8psNtbyNIAJaB/jMDkG6MOKrN8ommngw4m15OqGIS
-jGOqdGoSOeivMzJXd/qMFWUKOIGj8sItv/7zN2oVORHsXWxTlVzeEn9e0gDCEF9U
-Zzrt6zKnhwOxmfb1jR4dFtXfTjOa3GASXiJ0zP3x5W07Paf6eo3J9s7OXbkZZWvJ
-0ymppyuy29IFPDUhUKEQK0Y/W9xu1R9AdFEJQ4az2OLYbASfnrJ/3F6Pfr5qVuR2
-neQqb2K7Tf/Wt7m1Ry9Z+5HNfslwQoXy3IMge175wQKBgQD/+G7t8ggUtvxUkhBk
-kudSkCdB04Yktc2spPLUp0WVISOomaxypClZE5ewTBJ9fdooEwGZ2nKHuVt5oAfm
-H2zZTMrYs6AMq4IoP1TF92DVJ09sNVRGO+K5Nx9yBnzZ7gtqms9e4z2VorTrTnJa
-s1HxHgFQ2qqeq7tkyEftfffvbQKBgQCWYBSaZPYKSdfJe+LUAKVMGvwWhdwyD3kp
-NcY3zE+1QVn3RPnYkPYEASaJpEOLBCOSLMH19MFuFWkClRs+nNiaZtHvjVhaHZJX
-vABA1oXa4tTIXkI25fJn6D67T/uuFf2iMEfxjtjIyvFhAb7NUGjxBR0T4+xtTGZ8
-msIft+LxvQKBgQDyPuSEzkT1jcO6Kc3X0OuZSJHOi2ftgB1ZIXYq6O9CVm2P13fL
-uy7ifVdWYngxSZTXzjz6pTE036gBsAEpuV3jPPjQIxb6RqpUerM484gx0hUpPEM4
-gN5uGQvqdtdbzBwD1OUiUP7siWKdOs2gpwqKnbHzGi7VIYOkuqLP0SJ+9QKBgQCE
-mh8w8ryf3/PgIVWpOxSIIveO6OV+Y3SlKV0skQbsv78UtAdZuKKob1dLYsWIzdKM
-MNmtCPKVH14lP9Txhp/er7KKemqhtJf6s7bJdiI9HW8jbTMYc/cpN3wx8trt7Uhm
-gArA8QUrMwJdV4uoQzL27lpw0rkGvKtXT6TFEYOXRQKBgCWdYTeJe08xFzfsYyeO
-qFKQKs/05oS17mRQTxxbFqqcGr11vp5c/dkoWE28eBe7HN2XsRAi1mUN9FQfJvt4
-H6vZ7xYrnDnbXKtOCE/UMFkbROWOIn/5sBbNsCJzJdRCurrqvF5z8sTs8RQ20np7
-XN6EbGBGcXvslVKo8e2DhXYk
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCFfG1m9n7os361
+lKcQg/dqqVi5fVSPdk1Ht01UNnewRt6T0sFJp1UvGMmLlNi+qKRL422eHH6+mAQU
+FOjE8NxvvhWU0ANEsMAvRsQ3KKjxZJvdDaIn+K/HXdMkhm6WYXBv4bXGH5SWSydc
+UYia9yBu9sIsVZ3SCST79kU1JQzcTneJ4WinKSvs+O6VFzPN+B7DaOv1kE1YOf0x
+iCeP9Nx7WhuBMIRWEbSfjQNznzbWnDn3MH7G6UX2yTetEY1THuDN8RJnB1IekKDT
+DgSnSxrktJZeBU0C2xSKgQkbxTJGQiaFwlxsNQOiPJu79Yh7TCqngwtcwcCOy4m+
+9pLLDneDAgMBAAECggEAciNw0IeZAJTqlY0kRQTyPCvNh93YvkrjzZy47HceZIZU
+r4WYbMg+GGVTgJynsG82/QTcqEOpRINriVhPqIZjltCsV3B+Ou//hO03vgpwWugy
+NhQAQbltZEWf0y13xfJPV/thmKVMQi7E2zWEXy1MeFVattoGdqAHFcMAbm7dzkmt
+n0YtTq5/iM60qYMgZR1FyMI8lYGniE6TDSvRTeHzDxA0QzZ7nK6kooSPtJnBwY3i
+oHQSN7X94qVmAQNTk5a9L1PzQRpJne1ooG+dwE6jGe0rkJ+iz1oDOXo3wDo6HORf
+q3sqCWA3p65i4E56ZHLb7uQg96fhQOnOZJLf+lHXYQKBgQDoL03r/YymJVMbRJZJ
+tXMUaDX/XNr4AAwnl5wU3Ibnh24agFynBpdCeO6rL5sSM6r5qF4r3rd1KWIFoE4D
+NnqOCNn6wmlsonu4FA6wrQ1neRqMbaZPHhkL1BMXneJKg+ANW6UJw0GWeNOR+zwN
+2bmT1fJdVCoReACC20T3aCkkywKBgQCTLX8sa6XCPYTH1CU/LNwCGLhzR/nKI3XF
+LLnbFmIHejKUGyfyBJfVH3oy+5n7j6zAuzAzL38BA3okV85meYhoRKRS+xaUSUb1
+Dcpxt7lw+dleCJ+XLL3t1bv0pFCy72gLL6Nu1b8rTiFeG8GIzEDcKGinG+T3flDR
+cofN42dZKQKBgQCO/NLYCoWbrFDJ8is7qWr9nk/iu6R+JklV+KA+mLDb1SORXouw
+sPZmEWOqON8fDoK0zWNxUO9aT+n13QsuH1bKMdlL/H5AULAwZOnHFEu09XfME5rg
+DoEOL8SyPqElkqFgmJfCs2So7jAdLsOFJBiNWqyvnS1rJKPr8m0+j/8GkQKBgG99
+HoIaxYUfru7lAJYbuEmKSmdhlZIPTI5htCSHjxjU822IKLlHy3BxmNL4DwwmKRoS
+co/DofS1mpffQAYWeENsBAKsG82WuL63hKyiHUK8sXFvHN2a0gFRUEEhG9SAUJNw
+seAq4NbAJ7yvT+r9twBPR/+WvNrSgAw5MzC+27IJAoGAXcyzrGhU3cy/6rFUyzHx
+KdryRnAR1XlTfZQaqIySYzAL9cEEll2DQ0M11KIzMsSC92MToYHBtyPI9KhDcpw/
+3DnMLVzfOaUtxt/i/cG8s7ZUDs0mNMia1Rjs3WdNrBu2GGtvUs3tC2r/HE/dF2sV
+bDveQgsC2LO0H8u8J8iB+MU=
 -----END PRIVATE KEY-----
 `;
 
@@ -799,15 +799,16 @@ XN6EbGBGcXvslVKo8e2DhXYk
     }
 
     const params = {
-      merchantCode: process.env.TOPPAY_MERCHANT_CODE,
-      orderNum: transaction_id,
-      bankCode: (ifsc_code || bank_code || "").trim(),
-      bankAccount: (acc_no || "").trim(),
-      bankUsername: (account_name || "User").trim(),
-      orderAmount: cleanAmt, // ✅ integer only (no decimals)
-      callback: process.env.TOPPAY_PAYOUT_NOTIFY_URL,
-      timestamp: currentTimestamp, // ✅ Unix timestamp (seconds)
-    };
+  merchantCode: process.env.TOPPAY_MERCHANT_CODE,
+  orderNum: `${transaction_id}-${Date.now()}`,  // FIXED
+  bankCode: (ifsc_code || bank_code || "").trim(),
+  bankAccount: (acc_no || "").trim(),
+  bankUsername: (account_name || "User").trim(),
+  orderAmount: cleanAmt,
+  callback: process.env.TOPPAY_PAYOUT_NOTIFY_URL,
+  timestamp: currentTimestamp,
+};
+
 
     const signString = buildSignString(params);
     params.sign = rsaPrivateEncrypt(signString, privateKey);

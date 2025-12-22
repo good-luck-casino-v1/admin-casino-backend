@@ -27,7 +27,8 @@ router.get('/', async (req, res) => {
     
     // Get total super admin count
     const [superAdminResult] = await db.query("SELECT COUNT(*) as count FROM admin WHERE admin_type='super admin'");
-    const totalSuperAdmin = superAdminResult[0].count;
+    const totalSuperAdmin = superAdminResult[0].count > 1 ? 1 : superAdminResult[0].count;
+
     
     // Get total games count
     const [gamesResult] = await db.query('SELECT COUNT(*) as count FROM games');
