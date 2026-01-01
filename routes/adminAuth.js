@@ -53,7 +53,7 @@ router.post('/login', async (req, res) => {
     // ✅ Generate a JWT
     const token = jwt.sign(
       { id: admin.id, email: admin.email },
-      process.env.JWT_SECRET || '636a1bdbd96cb4d15882d9df2c373f90',
+      process.env.JWT_SECRET || '9cb25ab2bf81e52faaea36da6c27734bd1a3208e',
       { expiresIn: '30d' }
     );
 
